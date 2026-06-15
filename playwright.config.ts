@@ -55,6 +55,7 @@ export default defineConfig({
       testMatch: /tests[\\/]qb[\\/]global-setup\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 900 },
         baseURL: process.env.QB_BASE_URL || 'https://question-bank-dev.gkebooks.click',
         locale: 'vi-VN',
         userAgent:
@@ -66,6 +67,7 @@ export default defineConfig({
       testMatch: /tests[\\/]qb[\\/]specs[\\/].*\.spec\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 900 },
         baseURL: process.env.QB_BASE_URL || 'https://question-bank-dev.gkebooks.click',
         storageState: '.auth/admin.json',
         locale: 'vi-VN',

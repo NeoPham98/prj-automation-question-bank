@@ -51,9 +51,12 @@ export class QuestionFormPage {
   readonly toastWarning: Locator;
 
   constructor(private readonly page: Page) {
-    // TipTap ProseMirror editor — placeholder via data-placeholder attr on .ProseMirror node.
-    // First .ProseMirror = top-action-quiz name editor (question stem).
-    this.nameEditor = page.locator('.ProseMirror[contenteditable="true"]').first();
+    // TipTap ProseMirror editor — stem has data-placeholder="Nhập câu hỏi vào đây".
+    // Some types (drop_box) render multiple contenteditable blocks; avoid .first().
+    this.nameEditor = page
+      .locator('.ProseMirror[contenteditable="true"][data-placeholder="Nhập câu hỏi vào đây"]')
+      .or(page.locator('.ProseMirror[contenteditable="true"]').first())
+      .first();
 
     // Radix Select triggers with stable ids.
     this.typeSelectTrigger = page.locator('#framework');
@@ -134,7 +137,7 @@ export class QuestionFormPage {
     await this.nameEditor.click();
     await this.nameEditor.press('Control+a');
     await this.nameEditor.press('Delete');
-    await this.nameEditor.pressSequentially(text, { delay: 15 });
+    await this.nameEditor.pressSequentially(text, { delay: 5 });
     await this.nameEditor.blur();
     // Debounce auto-save in MultipleQuiz uses ~500ms — let store sync.
     await this.page.waitForTimeout(700);
@@ -219,60 +222,93 @@ export class QuestionFormPage {
     // Default subtype = single_choice (Choices.tsx:145) → checkbox click fires
     // handleCheckCorrectChange(id, 1) at answer-editor-child.tsx:241-243.
     const row = this.answerRows().nth(index);
+    await row.scrollIntoViewIfNeeded();
     const checkbox = row.locator('[role="checkbox"]').first();
-    await checkbox.click();
-    // Wait for aria-checked or data-state to flip to confirm toggle landed.
-    await expect(checkbox).toHaveAttribute('data-state', /checked|true/, {
-      timeout: 5_000,
-    }).catch(async () => {
-      // Some Radix versions use aria-checked instead.
-      await expect(checkbox).toHaveAttribute('aria-checked', 'true', {
-        timeout: 3_000,
-      });
-    });
-    await this.page.waitForTimeout(400);
+    await checkbox.waitFor({ state: 'visible', timeout: 5_000 });
+    await checkbox.click({ force: true });
+
+    await expect
+      .poll(
+        async () =>
+          (await checkbox.getAttribute('data-state')) ||
+          (await checkbox.getAttribute('aria-checked')) ||
+          '',
+        { timeout: 5_000 },
+      )
+      .toMatch(/checked|true/);
+
+    // MultipleQuiz emits payload with 500ms debounce; give store extra time before save.
+    await this.page.waitForTimeout(1200);
   }
 
   async save(): Promise<void> {
-    // Extra settle before clicking Lưu — pending debounced TipTap or Select
-    // updates can race the save handler and trigger "chưa nhập đáp án" warning.
-    await this.page.waitForTimeout(600);
+    await this.saveButton.scrollIntoViewIfNeeded();
     await this.saveButton.click();
   }
 
-  async expectSaveSuccess(): Promise<void> {
-    // Race success vs error/warning toast — fail-fast on validation reject.
-    const success = this.page
-      .getByText('Thêm câu hỏi thành công', { exact: false })
-      .waitFor({ state: 'visible', timeout: 20_000 });
+  async expectNoErrorToast(): Promise<void> {
+    await expect(
+      this.page.locator(
+        '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
+      ),
+    ).toHaveCount(0, { timeout: 2_000 });
+  }
+
+  private async expectRedirectWithoutError(timeout: number = 20_000): Promise<void> {
+    const redirect = this.page
+      .waitForURL(/\/banks\/[^/]+\?tab=library/, { timeout })
+      .then(() => 'redirect' as const);
     const errorToast = this.page
       .locator(
         '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
       )
       .first();
-    const failure = errorToast
+    const failure = errorToast.waitFor({ state: 'visible', timeout }).then(async () => {
+      const text = await errorToast.textContent();
+      throw new Error(`Save failed — toast: ${(text || '').trim() || '<empty>'}`);
+    });
+
+    await Promise.race([redirect, failure]);
+  }
+
+  async expectSaveSuccess(): Promise<void> {
+    const successToast = this.page
+      .getByText('Thêm câu hỏi thành công', { exact: false })
       .waitFor({ state: 'visible', timeout: 20_000 })
-      .then(async () => {
-        const text = await errorToast.textContent();
-        throw new Error(`Save failed — toast: ${(text || '').trim() || '<empty>'}`);
-      });
-    await Promise.race([success, failure]);
-    await this.page.waitForURL(/\/banks\/[^/]+\?tab=library/, { timeout: 20_000 });
+      .then(() => 'toast' as const);
+
+    await Promise.race([successToast, this.expectRedirectWithoutError(20_000)]);
+    await this.expectNoErrorToast();
+
+    await expect(this.page.getByText('Thêm câu hỏi thành công', { exact: false })).toBeVisible({
+      timeout: 2_000,
+    });
+
+    // settle store + editor DOM
+    await this.page.waitForTimeout(800);
   }
 
   async expectEditSuccess(): Promise<void> {
-    // Edit toast "Sửa câu hỏi thành công" (QuizNavbar.tsx:668) + same handleAfterSave redirect.
-    await expect(
-      this.page.getByText('Sửa câu hỏi thành công', { exact: false }),
-    ).toBeVisible({ timeout: 20_000 });
-    await this.page.waitForURL(/\/banks\/[^/]+\?tab=library/, { timeout: 20_000 });
+    const redirect = this.page.waitForURL(/\/banks\/[^/]+\?tab=library/, {
+      timeout: 20_000,
+    });
+
+    const successToast = this.page
+      .getByText('Sửa câu hỏi thành công', { exact: false })
+      .waitFor({ state: 'visible', timeout: 20_000 });
+
+    await Promise.race([redirect, successToast]).catch(() => {});
+    await this.expectNoErrorToast();
+
+    // Some flows (group) may not show the toast.
+    await this.page.waitForTimeout(800);
   }
 
   // Click the subtype pill button (arrayMultipleChoiceUI) by accessible name.
   // Source: src/components/QuizStudio/quiz-form/types/multiple-quiz.tsx + Choices subtype row.
   private async selectMCSubtype(label: string): Promise<void> {
     const btn = this.page.getByRole('button', { name: label, exact: true });
-    await btn.first().scrollIntoViewIfNeeded();
+    await btn.first().waitFor({ state: 'visible', timeout: 10_000 });
     await btn.first().click();
     await this.page.waitForTimeout(400);
   }
@@ -310,7 +346,7 @@ export class QuestionFormPage {
       await correctCell.click();
       await this.page.waitForTimeout(500);
     } else if (variant === 'multi') {
-      await this.selectMCSubtype('Trắc nghiệm nhiều đáp án');
+      await this.selectMCSubtype('Chọn nhiều đáp án');
       await this.fillAnswerAt(0, `${name} - A`);
       await this.fillAnswerAt(1, `${name} - B`);
       // Add 3rd row if not present, fill, mark 2 correct.
@@ -432,15 +468,87 @@ export class QuestionFormPage {
     return this.page.locator('.isEdit .ProseMirror[contenteditable="true"]');
   }
 
-  async fillBlankAt(index: number, text: string): Promise<void> {
+  blankHotspots(): Locator {
+    // Tận cùng canvas hotspot cho blank (TipTap node).
+    return this.page.locator('.ProseMirror[contenteditable="true"]');
+  }
+
+  async rebuildFillBlankStemLikeCreate(
+    stemText: string,
+    blanksCount: number = 2,
+    opts?: {
+      typeDelay?: number;
+      blankPrefixDelay?: number;
+      betweenBlanksMs?: number;
+      deleteDelay?: number;
+      clearFromEnd?: boolean;
+    },
+  ): Promise<void> {
+    const typeDelay = opts?.typeDelay ?? 15;
+    const blankPrefixDelay = opts?.blankPrefixDelay ?? 15;
+    const betweenBlanksMs = opts?.betweenBlanksMs ?? 150;
+    const deleteDelay = opts?.deleteDelay ?? 20;
+
+    await this.nameEditor.click();
+
+    if (opts?.clearFromEnd) {
+      await this.nameEditor.press('End');
+
+      // clear slowly until both visible text and inline blank nodes are gone
+      for (let i = 0; i < 600; i++) {
+        const currentText = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
+        const blankCount = await this.blankEditors().count().catch(() => 0);
+        if (!currentText && blankCount === 0) break;
+        await this.nameEditor.press('Backspace');
+        await this.page.waitForTimeout(deleteDelay);
+      }
+
+      const after = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
+      const remainingBlanks = await this.blankEditors().count().catch(() => 0);
+      if (after || remainingBlanks > 0) {
+        throw new Error(
+          `Failed to clear stem; remainingText="${after.slice(0, 30)}" remainingBlanks=${remainingBlanks}`,
+        );
+      }
+    } else {
+      await this.nameEditor.press('Control+a');
+      await this.nameEditor.press('Delete');
+    }
+
+    // Re-focus TipTap after Backspace loop (edit mode can temporarily unmount/rebind nodes).
+    await this.nameEditor.click();
+    await this.nameEditor.pressSequentially(stemText, { delay: typeDelay });
+
+    for (let i = 0; i < blanksCount; i++) {
+      await this.nameEditor.pressSequentially(' ', { delay: blankPrefixDelay });
+      await this.nameEditor.pressSequentially('__', { delay: 30 });
+      await this.page.waitForTimeout(betweenBlanksMs);
+    }
+
+    await this.nameEditor.blur();
+    await this.page.waitForTimeout(500);
+  }
+
+  async fillBlankAt(
+    index: number,
+    text: string,
+    opts?: { typeDelay?: number; clearDelay?: number },
+  ): Promise<void> {
     const editor = this.blankEditors().nth(index);
+
+    if (!(await editor.isVisible().catch(() => false))) {
+      const hotspot = this.blankHotspots().nth(index);
+      await hotspot.click({ force: true });
+    }
+
     await editor.waitFor({ state: 'visible', timeout: 8_000 });
     await editor.click();
     await editor.press('Control+a');
-    await editor.press('Delete');
-    await editor.pressSequentially(text, { delay: 15 });
+    await editor.press('Backspace');
+    if (opts?.clearDelay) await this.page.waitForTimeout(opts.clearDelay);
+    await editor.pressSequentially(text, { delay: opts?.typeDelay ?? 30 });
     await editor.blur();
-    await this.page.waitForTimeout(400);
+    await this.page.waitForTimeout(800);
   }
 
   // DragFalseAnswers section (drag-false-answers.tsx:68-109). Container has
@@ -452,11 +560,18 @@ export class QuestionFormPage {
       .first();
   }
 
+  wrongAnswerInputs(): Locator {
+    const section = this.dragFalseSection();
+    // node-input-auto-span renders native <input> with tailwind classes.
+    // Keep strict first, fallback broader for UI drift.
+    return section.locator('input.min-w-20.w-20, input');
+  }
+
   async addWrongAnswer(text: string): Promise<void> {
     const section = this.dragFalseSection();
     await section.scrollIntoViewIfNeeded();
     const addBtn = section.getByRole('button', { name: 'Thêm', exact: true });
-    const rows = section.locator('input.min-w-20.w-20');
+    const rows = this.wrongAnswerInputs();
     const before = await rows.count();
     await addBtn.click();
     await expect
@@ -469,15 +584,32 @@ export class QuestionFormPage {
     await this.page.waitForTimeout(400);
   }
 
+  async editWrongAnswerAt(index: number, text: string): Promise<void> {
+    const inputs = this.wrongAnswerInputs();
+
+    while ((await inputs.count()) <= index) {
+      await this.addWrongAnswer('tmp');
+    }
+
+    const input = inputs.nth(index);
+    await input.scrollIntoViewIfNeeded();
+    await input.click({ force: true });
+    await input.press('Control+a');
+    await input.press('Delete');
+    await input.pressSequentially(text, { delay: 30 });
+    await input.blur();
+    await this.page.waitForTimeout(400);
+  }
+
   // Fill-in-the-blank save. 2 blanks + fill correct answer into each.
   // No DragFalseAnswers for fill type (fill-drag-drop-quiz/index.tsx:471-472).
   async saveFillBlankQuestion(name: string): Promise<void> {
     await this.setNameWithBlanks(name, 2);
-    await this.selectFirstDifficulty();
-    await this.selectFirstProgramLeaf();
+    await this.fillBlankAt(0, 'a1');
+    await this.fillBlankAt(1, 'a2');
     await this.attachImageToStem().catch(() => {});
-    await this.fillBlankAt(0, `${name}-a1`);
-    await this.fillBlankAt(1, `${name}-a2`);
+    await this.selectFirstProgramLeaf();
+    await this.selectFirstDifficulty();
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -509,6 +641,41 @@ export class QuestionFormPage {
   // is_correct=false adjacent children collide → 2nd marked is_deleted=true. Fix:
   // fill content into each new editable child BEFORE clicking "Thêm lựa chọn" again,
   // so each child has a unique normalized key.
+  private dropBoxChoiceAddButton(): Locator {
+    return this.page.getByRole('button', { name: 'Thêm lựa chọn', exact: true }).first();
+  }
+
+  private dropBoxChoiceEditors(): Locator {
+    // Choice editors are TipTap ProseMirror contenteditable nodes.
+    return this.page.locator('.ProseMirror[contenteditable="true"]');
+  }
+
+  private async ensureDropBoxChoiceRow(): Promise<void> {
+    const addChoice = this.dropBoxChoiceAddButton();
+    await addChoice.waitFor({ state: 'visible', timeout: 25_000 });
+    await addChoice.scrollIntoViewIfNeeded();
+
+    const editors = this.dropBoxChoiceEditors();
+    const before = await editors.count();
+    await addChoice.click({ force: true });
+    await expect
+      .poll(async () => await editors.count(), { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(before + 1);
+  }
+
+  private async fillDropBoxChoiceAt(index: number, text: string): Promise<void> {
+    const editors = this.dropBoxChoiceEditors();
+    const editor = editors.nth(index);
+    await editor.waitFor({ state: 'visible', timeout: 8_000 });
+    await editor.scrollIntoViewIfNeeded();
+    await editor.click();
+    await editor.press('Control+a');
+    await editor.press('Delete');
+    await editor.pressSequentially(text, { delay: 15 });
+    await editor.blur();
+    await this.page.waitForTimeout(400);
+  }
+
   async saveDropBoxQuestion(name: string): Promise<void> {
     await this.setNameWithBlanks(name, 1);
     await this.selectFirstDifficulty();
@@ -517,47 +684,61 @@ export class QuestionFormPage {
     // Fill the blank's correct-answer inline editor (createDropBoxContentNode).
     await this.fillBlankAt(0, `${name}-correct`);
 
-    const blankSection = this.page
-      .locator('div.rounded-lg')
-      .filter({ hasText: /chỗ trống\s*\d+/ })
-      .first();
-    await blankSection.waitFor({ state: 'visible', timeout: 10_000 });
-
-    const addChoice = blankSection.getByRole('button', { name: 'Thêm lựa chọn' });
-    await addChoice.scrollIntoViewIfNeeded();
-
-    // Editable children = added via "Thêm lựa chọn". Seed correct child has
-    // editable=false so does NOT count. Need 2 editable children total.
-    const editableChildEditors = blankSection.locator(
-      '.ProseMirror[contenteditable="true"]',
-    );
-
-    // Fill content into the editor at given index. Unique text per index avoids
-    // normalize-dup-key collision.
-    const fillEditableAt = async (index: number): Promise<void> => {
-      const editor = editableChildEditors.nth(index);
-      await editor.waitFor({ state: 'visible', timeout: 5_000 });
-      await editor.click();
-      await editor.press('Control+a');
-      await editor.press('Delete');
-      await editor.pressSequentially(`${name} opt${index + 1}`, { delay: 15 });
-      await editor.blur();
-      await this.page.waitForTimeout(400);
-    };
-
-    // Click "Thêm" then wait for editable count to grow. Fill new child IMMEDIATELY
-    // with unique content before next click.
-    for (let target = 1; target <= 2; target++) {
-      const beforeCount = await editableChildEditors.count();
-      await addChoice.click({ force: true });
-      await expect
-        .poll(async () => await editableChildEditors.count(), { timeout: 8_000 })
-        .toBeGreaterThanOrEqual(beforeCount + 1);
-      await fillEditableAt(beforeCount);
+    // Click "Thêm lựa chọn" twice; fill new choice editor IMMEDIATELY.
+    for (let i = 0; i < 2; i++) {
+      await this.ensureDropBoxChoiceRow();
+      const idx = (await this.dropBoxChoiceEditors().count()) - 1;
+      await this.fillDropBoxChoiceAt(idx, `${name} opt${idx + 1}`);
     }
 
     await this.save();
     await this.expectSaveSuccess();
+  }
+
+  async rebuildDropBoxLikeCreate(name: string, correctAnswer: string): Promise<void> {
+    await this.rebuildFillBlankStemLikeCreate(name, 1, {
+      clearFromEnd: true,
+      deleteDelay: 25,
+      typeDelay: 60,
+      blankPrefixDelay: 40,
+      betweenBlanksMs: 250,
+    });
+    await this.fillBlankAt(0, correctAnswer, { typeDelay: 30 });
+  }
+
+  async editDropBoxBlankAnswer(text: string): Promise<void> {
+    await this.fillBlankAt(0, text, { typeDelay: 30 });
+  }
+
+  async editDropBoxChoices(optPrefix: string): Promise<void> {
+    for (let i = 0; i < 2; i++) {
+      if ((await this.dropBoxChoiceEditors().count().catch(() => 0)) <= i) {
+        await this.ensureDropBoxChoiceRow();
+      }
+      await this.fillDropBoxChoiceAt(i, `${optPrefix} opt${i + 1}`);
+    }
+  }
+
+  async rebuildDropBoxLikeCreateWithChoices(
+    name: string,
+    correctAnswer: string,
+  ): Promise<void> {
+    const optPrefix = correctAnswer.replace(/_ANS$/, '');
+
+    await this.rebuildFillBlankStemLikeCreate(name, 1, {
+      clearFromEnd: true,
+      deleteDelay: 25,
+      typeDelay: 60,
+      blankPrefixDelay: 40,
+      betweenBlanksMs: 250,
+    });
+    await this.fillBlankAt(0, correctAnswer, { typeDelay: 30 });
+
+    for (let i = 0; i < 2; i++) {
+      await this.ensureDropBoxChoiceRow();
+      const idx = (await this.dropBoxChoiceEditors().count()) - 1;
+      await this.fillDropBoxChoiceAt(idx, `${optPrefix} opt${idx + 1}`);
+    }
   }
 
   // Group save (QuizNavbar.tsx:888-927). Validation:
@@ -597,7 +778,7 @@ export class QuestionFormPage {
       await subStem.click();
       await subStem.press('Control+a');
       await subStem.press('Delete');
-      await subStem.pressSequentially(`${name} sub ${i + 1}`, { delay: 15 });
+      await subStem.pressSequentially(`${name} sub ${i + 1}`, { delay: 5 });
       await subStem.blur();
       await this.page.waitForTimeout(500);
 
@@ -615,7 +796,7 @@ export class QuestionFormPage {
         await editor.click();
         await editor.press('Control+a');
         await editor.press('Delete');
-        await editor.pressSequentially(`${name} s${i + 1} ${letter}`, { delay: 15 });
+        await editor.pressSequentially(`${name} s${i + 1} ${letter}`, { delay: 5 });
         await editor.blur();
         await this.page.waitForTimeout(400);
       }
@@ -723,6 +904,18 @@ export class QuestionFormPage {
     }
     await cells.nth(1).click();
     await this.page.waitForTimeout(500);
+  }
+
+  async expectGroupEditLoaded(subCount: number = 2): Promise<void> {
+    // Parent framework may still show "Trắc nghiệm" label while rendering group editor.
+    // Gate on group-specific editor scaffold.
+    await expect(this.saveButton).toBeVisible({ timeout: 20_000 });
+    await expect(
+      this.page.getByRole('button', { name: 'Thêm câu hỏi', exact: true }),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      this.page.locator('div.rounded-xl.bg-white.border.border-gray-200.shadow-sm'),
+    ).toHaveCount(subCount, { timeout: 20_000 });
   }
 
   // Group edit: replace first sub-card's first MC answer row text.

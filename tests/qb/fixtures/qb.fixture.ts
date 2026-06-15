@@ -21,9 +21,55 @@ type QbFixtures = {
   approval: ApprovalTab;
   curriculum: CurriculumDetailPage;
   difficulty: DifficultyDetailPage;
+  uiGate: undefined;
 };
 
 export const test = base.extend<QbFixtures>({
+  uiGate: [
+    async ({ page }, use) => {
+      const errors: string[] = [];
+
+      const onPageError = (err: Error) => {
+        errors.push(`pageerror: ${err.message}`);
+      };
+
+      const onConsole = (msg: any) => {
+        try {
+          if (msg.type?.() === 'error') {
+            errors.push(`console.error: ${msg.text()}`);
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      const onRequestFailed = (req: any) => {
+        try {
+          const errorText = req.failure()?.errorText || 'unknown';
+          // Navigation/route changes abort in-flight requests (common on Next.js RSC).
+          if (errorText.includes('net::ERR_ABORTED')) return;
+          errors.push(`requestfailed: ${req.url()} (${errorText})`);
+        } catch {
+          errors.push('requestfailed: unknown');
+        }
+      };
+
+      page.on('pageerror', onPageError);
+      page.on('console', onConsole);
+      page.on('requestfailed', onRequestFailed);
+
+      await use(undefined);
+
+      page.off('pageerror', onPageError);
+      page.off('console', onConsole);
+      page.off('requestfailed', onRequestFailed);
+
+      if (errors.length) {
+        throw new Error(errors.join('\n'));
+      }
+    },
+    { auto: true },
+  ],
   sidebar: async ({ page }, use) => {
     await use(new SidebarNav(page));
   },

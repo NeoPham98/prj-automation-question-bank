@@ -83,8 +83,10 @@ export class BankDetailPage {
   }
 
   async switchToLibrary(): Promise<void> {
-    await this.tabLibrary.click();
-    await expect(this.tabLibrary).toHaveAttribute('data-state', 'active');
+    await this.tabLibrary.waitFor({ state: 'visible', timeout: 20_000 });
+    await this.tabLibrary.scrollIntoViewIfNeeded();
+    await this.tabLibrary.click({ force: true });
+    await expect(this.tabLibrary).toHaveAttribute('data-state', 'active', { timeout: 20_000 });
   }
 
   async switchToPendingTab(): Promise<void> {
@@ -141,10 +143,11 @@ export class BankDetailPage {
   async clickEditQuestion(name: string): Promise<void> {
     const card = this.questionItemByName(name);
     await card.waitFor({ state: 'visible', timeout: 10_000 });
-    await card
-      .locator('a[href*="/question-bank/quiz-form"][href*="quizId="] button')
-      .first()
-      .click();
+    const editLink = card
+      .locator('a[href*="/question-bank/quiz-form"][href*="quizId="]')
+      .first();
+    await editLink.waitFor({ state: 'visible', timeout: 10_000 });
+    await editLink.click();
     await this.page.waitForURL(/\/question-bank\/quiz-form\?code=.*&quizId=/, {
       timeout: 15_000,
     });

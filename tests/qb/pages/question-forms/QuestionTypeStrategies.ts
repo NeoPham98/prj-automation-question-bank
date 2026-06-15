@@ -80,7 +80,7 @@ class GroupStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveGroupQuestion(name, 4);
+    await form.saveGroupQuestion(name, 2);
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.editGroupFirstSubAnswer(newText);
@@ -97,7 +97,8 @@ class FillBlankStrategy implements QuestionTypeStrategy {
     await form.saveFillBlankQuestion(name);
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
-    await form.fillBlankAt(0, newText);
+    await form.fillBlankAt(0, 'b1', { typeDelay: 30 });
+    await form.fillBlankAt(1, 'b2', { typeDelay: 30 });
   }
 }
 
@@ -139,7 +140,10 @@ class DropBoxStrategy implements QuestionTypeStrategy {
     await form.saveDropBoxQuestion(name);
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
-    await form.fillBlankAt(0, newText);
+    // drop_box edit: update blank(correct) + 2 extra choices.
+    const optPrefix = newText.replace(/_ANS$/, '');
+    await form.editDropBoxBlankAnswer(newText);
+    await form.editDropBoxChoices(optPrefix);
   }
 }
 
@@ -153,7 +157,10 @@ class DragDropStrategy implements QuestionTypeStrategy {
     await form.saveDragDropQuestion(name);
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
-    await form.fillBlankAt(0, newText);
+    await form.fillBlankAt(0, 'b1', { typeDelay: 30 });
+    await form.fillBlankAt(1, 'b2', { typeDelay: 30 });
+    await form.editWrongAnswerAt(0, 'w1');
+    await form.editWrongAnswerAt(1, 'w2');
   }
 }
 

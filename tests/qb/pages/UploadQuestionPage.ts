@@ -43,10 +43,19 @@ export class UploadQuestionPage {
     await this.saveButton.click();
   }
 
+  async expectNoErrorToast(): Promise<void> {
+    await expect(
+      this.page.locator(
+        '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
+      ),
+    ).toHaveCount(0, { timeout: 2_000 });
+  }
+
   async expectSaveSuccess(): Promise<void> {
     // Toast: "Đã lưu {n} câu hỏi vào ngân hàng."
     await expect(
       this.page.getByText(/Đã lưu \d+ câu hỏi vào ngân hàng/),
     ).toBeVisible({ timeout: 30_000 });
+    await this.expectNoErrorToast();
   }
 }

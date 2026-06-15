@@ -1,0 +1,23 @@
+node_modules/
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/
+.env
+.env.local
+*.log
+.auth/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python agent (browser-use)
+agent/.venv/
+agent/__pycache__/
+agent/**/__pycache__/
+agent/*.egg-info/
+.python-version
+
+# Reference codebase (upstream clone, inspected read-only)
+prj-ths-question-bank/

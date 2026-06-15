@@ -1,0 +1,221 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { Page, expect } from '@playwright/test';
+import { QuestionFormPage, QuizTypeCode, QUIZ_TYPE_LABELS } from '../QuestionFormPage';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Per-type strategy for smoke verification.
+// Full save flow implemented for ALL 8 types. Sticker requires sample image fixture.
+// MC has 3 sub-variants (single / multi / statement) → 3 test cases.
+//
+// Sources:
+//   src/components/QuizStudio/quiz-form/types/multiple-quiz.tsx — Choices subtype switch
+//   src/components/QuizStudio/quiz-form/types/essay-quiz.tsx + DialogAiJudge — popup rubric
+//   src/components/QuizStudio/quiz-form/types/matching-quiz.tsx — 3 pairs
+//   src/components/QuizStudio/quiz-form/types/fill-drag-drop-quiz/ — TipTap "__" blank
+//   src/components/QuizStudio/quiz-form/types/group-quiz/index.tsx — parent + subs
+//   src/components/QuizStudio/quiz-form/types/image-label-quiz/ — sticker
+//   src/components/Studio/editor-node/input-fill-drag-drop-node/index.tsx:6 — /__$/
+//   src/components/QuizStudio/quiz-form/quiz-service/index.tsx:32-148 — validation
+
+export type MCVariant = 'single' | 'multi' | 'statement';
+
+export interface QuizTestCase {
+  readonly code: QuizTypeCode;
+  readonly variant?: MCVariant;
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface QuestionTypeStrategy {
+  readonly code: QuizTypeCode;
+  expectFormLoaded(page: Page): Promise<void>;
+  readonly canSmokeSave: boolean;
+  performSave(form: QuestionFormPage, name: string, tc: QuizTestCase): Promise<void>;
+  // Per-type answer edit. Called after clickEditQuestion + setName(newStem).
+  // Implementation differs per type (MC rows, blanks, rubric dialog, sticker labels...).
+  editAnswer(form: QuestionFormPage, newText: string, tc: QuizTestCase): Promise<void>;
+}
+
+async function expectSharedFormVisible(page: Page): Promise<void> {
+  await expect(page.locator('.ProseMirror[contenteditable="true"]').first()).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.locator('#framework')).toBeVisible();
+}
+
+// Sample image fixture for sticker upload. Spec must ensure file exists.
+export const SAMPLE_STICKER_IMAGE_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'data',
+  'sample-sticker.png',
+);
+
+class MultipleChoiceStrategy implements QuestionTypeStrategy {
+  readonly code = 'multiple_choice' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string, tc: QuizTestCase): Promise<void> {
+    await form.saveMultipleChoiceQuestion(name, tc.variant ?? 'single');
+  }
+  // single/multi: edit row-0 text. statement: flip 2nd preview cell.
+  async editAnswer(form: QuestionFormPage, newText: string, tc: QuizTestCase): Promise<void> {
+    if (tc.variant === 'statement') {
+      await form.toggleStatementAlternateCorrect();
+    } else {
+      await form.fillAnswerAt(0, newText);
+    }
+  }
+}
+
+class GroupStrategy implements QuestionTypeStrategy {
+  readonly code = 'group' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveGroupQuestion(name, 4);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.editGroupFirstSubAnswer(newText);
+  }
+}
+
+class FillBlankStrategy implements QuestionTypeStrategy {
+  readonly code = 'fill_in_the_blank' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveFillBlankQuestion(name);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.fillBlankAt(0, newText);
+  }
+}
+
+class EssayStrategy implements QuestionTypeStrategy {
+  readonly code = 'essay' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveEssayQuestion(name);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.editEssayRubric(newText);
+  }
+}
+
+class MatchingStrategy implements QuestionTypeStrategy {
+  readonly code = 'matching' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveMatchingQuestion(name);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.fillAnswerAt(0, newText);
+  }
+}
+
+class DropBoxStrategy implements QuestionTypeStrategy {
+  readonly code = 'drop_box' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveDropBoxQuestion(name);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.fillBlankAt(0, newText);
+  }
+}
+
+class DragDropStrategy implements QuestionTypeStrategy {
+  readonly code = 'drag_and_drop' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveDragDropQuestion(name);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.fillBlankAt(0, newText);
+  }
+}
+
+class StickerStrategy implements QuestionTypeStrategy {
+  readonly code = 'sticker' as const;
+  readonly canSmokeSave = true;
+  async expectFormLoaded(page: Page): Promise<void> {
+    await expectSharedFormVisible(page);
+  }
+  async performSave(form: QuestionFormPage, name: string): Promise<void> {
+    await form.saveStickerQuestion(name, SAMPLE_STICKER_IMAGE_PATH);
+  }
+  async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
+    await form.addStickerWrongLabel(newText);
+  }
+}
+
+export const QUESTION_TYPE_STRATEGIES: Record<QuizTypeCode, QuestionTypeStrategy> = {
+  multiple_choice: new MultipleChoiceStrategy(),
+  group: new GroupStrategy(),
+  fill_in_the_blank: new FillBlankStrategy(),
+  essay: new EssayStrategy(),
+  matching: new MatchingStrategy(),
+  drop_box: new DropBoxStrategy(),
+  drag_and_drop: new DragDropStrategy(),
+  sticker: new StickerStrategy(),
+};
+
+export const ALL_QUIZ_TYPE_CODES: QuizTypeCode[] = Object.keys(
+  QUIZ_TYPE_LABELS,
+) as QuizTypeCode[];
+
+// 10 test cases: 3 MC variants + 7 other types. Drives spec iteration.
+// User requirement: "trắc nghiệm 1 đáp án, nhiều đáp án và trắc nghiệm đúng sai".
+export const ALL_QUIZ_TEST_CASES: QuizTestCase[] = [
+  {
+    code: 'multiple_choice',
+    variant: 'single',
+    id: 'mc_single',
+    label: `${QUIZ_TYPE_LABELS.multiple_choice} - 1 đáp án`,
+  },
+  {
+    code: 'multiple_choice',
+    variant: 'multi',
+    id: 'mc_multi',
+    label: `${QUIZ_TYPE_LABELS.multiple_choice} - nhiều đáp án`,
+  },
+  {
+    code: 'multiple_choice',
+    variant: 'statement',
+    id: 'mc_statement',
+    label: `${QUIZ_TYPE_LABELS.multiple_choice} - đúng sai`,
+  },
+  { code: 'group', id: 'group', label: QUIZ_TYPE_LABELS.group },
+  {
+    code: 'fill_in_the_blank',
+    id: 'fill_in_the_blank',
+    label: QUIZ_TYPE_LABELS.fill_in_the_blank,
+  },
+  { code: 'essay', id: 'essay', label: QUIZ_TYPE_LABELS.essay },
+  { code: 'matching', id: 'matching', label: QUIZ_TYPE_LABELS.matching },
+  { code: 'drop_box', id: 'drop_box', label: QUIZ_TYPE_LABELS.drop_box },
+  { code: 'drag_and_drop', id: 'drag_and_drop', label: QUIZ_TYPE_LABELS.drag_and_drop },
+  { code: 'sticker', id: 'sticker', label: QUIZ_TYPE_LABELS.sticker },
+];

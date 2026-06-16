@@ -456,6 +456,7 @@ export class QuestionFormPage {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
+    await this.attachImageToStem().catch(() => {});
 
     // Open id=3 popup: card containing title "Thêm đáp án cho câu hỏi".
     // Button text is "Thiết lập" when content empty (essay-quiz.tsx:227).
@@ -499,6 +500,7 @@ export class QuestionFormPage {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
+    await this.attachImageToStem().catch(() => {});
 
     const total = await this.answerRows().count();
     if (total < 6) {

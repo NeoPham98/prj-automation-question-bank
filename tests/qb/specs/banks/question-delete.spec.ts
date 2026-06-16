@@ -32,14 +32,20 @@ test.describe('Question delete', () => {
       'DEL_DLG',
     );
     bankName = seed.bankName;
+    const card = bankDetail.questionItemByName(seed.questionName);
 
+    await expect(card).toBeVisible({ timeout: 15_000 });
     await bankDetail.clickDeleteQuestion(seed.questionName);
     await expect(bankDetail.deleteConfirmDialog).toBeVisible();
+    await expect(bankDetail.deleteConfirmDialog).toContainText('Bạn có chắc muốn xóa câu hỏi này?');
     await expect(bankDetail.deleteConfirmButton).toBeVisible();
+    await expect(bankDetail.deleteCancelButton).toBeVisible();
+    await expect(card).toBeVisible();
 
     // Cancel — leave seed for afterEach bank cleanup.
     await bankDetail.deleteCancelButton.click();
     await expect(bankDetail.deleteConfirmDialog).toBeHidden({ timeout: 5_000 });
+    await expect(card).toBeVisible();
   });
 
   test('confirm removes question from library list', async ({
@@ -56,12 +62,16 @@ test.describe('Question delete', () => {
       'DEL_GO',
     );
     bankName = seed.bankName;
+    const card = bankDetail.questionItemByName(seed.questionName);
 
+    await expect(card).toBeVisible({ timeout: 15_000 });
     await bankDetail.clickDeleteQuestion(seed.questionName);
+    await expect(bankDetail.deleteConfirmDialog).toContainText('Bạn có chắc muốn xóa câu hỏi này?');
+    await expect(bankDetail.deleteConfirmButton).toBeVisible();
+    await expect(bankDetail.deleteCancelButton).toBeVisible();
+
     await bankDetail.confirmDeleteQuestion();
 
-    await expect(
-      bankDetail.questionItemByName(seed.questionName),
-    ).toHaveCount(0, { timeout: 15_000 });
+    await expect(card).toHaveCount(0, { timeout: 15_000 });
   });
 });

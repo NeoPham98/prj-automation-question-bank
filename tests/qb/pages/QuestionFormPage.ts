@@ -224,6 +224,52 @@ export class QuestionFormPage {
     );
   }
 
+  answerEditorAt(index: number): Locator {
+    return this.answerRows().nth(index).locator('.ProseMirror[contenteditable="true"]').first();
+  }
+
+  async expectAnswerCount(count: number): Promise<void> {
+    await expect(this.answerRows()).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectAnswerAt(index: number, text: string): Promise<void> {
+    await expect(this.answerEditorAt(index)).toContainText(text, { timeout: 10_000 });
+  }
+
+  statementAnswerCells(): Locator {
+    return this.page.locator('[role="checkbox"][aria-label^="Chọn đáp án đúng:"]');
+  }
+
+  async expectStatementCellCount(count: number): Promise<void> {
+    await expect(this.statementAnswerCells()).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectStatementCellChecked(index: number): Promise<void> {
+    const cell = this.statementAnswerCells().nth(index);
+    await expect
+      .poll(
+        async () =>
+          (await cell.getAttribute('data-state')) ||
+          (await cell.getAttribute('aria-checked')) ||
+          '',
+        { timeout: 10_000 },
+      )
+      .toMatch(/checked|true/);
+  }
+
+  async expectStatementAnyChecked(): Promise<void> {
+    const count = await this.statementAnswerCells().count();
+    for (let i = 0; i < count; i++) {
+      const cell = this.statementAnswerCells().nth(i);
+      const state =
+        (await cell.getAttribute('data-state').catch(() => null)) ||
+        (await cell.getAttribute('aria-checked').catch(() => null)) ||
+        '';
+      if (/checked|true/.test(state)) return;
+    }
+    throw new Error('Expected at least one checked statement cell');
+  }
+
   async fillAnswerAt(index: number, text: string): Promise<void> {
     // Each row has 1 .ProseMirror[contenteditable] inside QuizStudioEditor.
     // TipTap onUpdate fires only on actual key/blur events. Playwright fill()
@@ -545,6 +591,18 @@ export class QuestionFormPage {
     return this.page.locator('.isEdit .ProseMirror[contenteditable="true"]');
   }
 
+  async expectStemContains(text: string): Promise<void> {
+    await expect(this.nameEditor).toContainText(text, { timeout: 10_000 });
+  }
+
+  async expectBlankCount(count: number): Promise<void> {
+    await expect(this.blankEditors()).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectBlankAt(index: number, text: string): Promise<void> {
+    await expect(this.blankEditors().nth(index)).toContainText(text, { timeout: 10_000 });
+  }
+
   blankHotspots(): Locator {
     // Tận cùng canvas hotspot cho blank (TipTap node).
     return this.page.locator('.ProseMirror[contenteditable="true"]');
@@ -670,6 +728,19 @@ export class QuestionFormPage {
     // node-input-auto-span renders native <input> with tailwind classes.
     // Keep strict first, fallback broader for UI drift.
     return section.locator('input.min-w-20.w-20, input');
+  }
+
+  async expectWrongAnswerCount(count: number): Promise<void> {
+    await expect(this.wrongAnswerInputs()).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectWrongAnswers(values: string[]): Promise<void> {
+    await expect.poll(
+      async () => this.wrongAnswerInputs().evaluateAll(
+        (els) => (els as HTMLInputElement[]).map((e) => e.value).sort(),
+      ),
+      { timeout: 10_000 },
+    ).toEqual([...values].sort());
   }
 
   async addWrongAnswer(text: string): Promise<void> {
@@ -1039,6 +1110,38 @@ export class QuestionFormPage {
     await expect(
       this.page.locator('div.rounded-xl.bg-white.border.border-gray-200.shadow-sm'),
     ).toHaveCount(subCount, { timeout: 20_000 });
+  }
+
+  async expectImageVisible(): Promise<void> {
+    await expect(
+      this.page.locator('img').filter({ hasNot: this.page.locator('[alt=""]') }).first(),
+    ).toBeVisible({ timeout: 10_000 });
+  }
+
+  async expectRubricSummaryContains(text: string): Promise<void> {
+    const rubricCard = this.page.locator(
+      'div.rounded-xl:has(p:has-text("Thêm đáp án cho câu hỏi"))',
+    );
+    await expect(rubricCard).toContainText(text, { timeout: 10_000 });
+  }
+
+  async expectStickerLabelVisible(text: string): Promise<void> {
+    await expect(this.page.locator(`input[title="${text}"]`).first()).toBeVisible({ timeout: 10_000 });
+  }
+
+  async expectGroupSubCount(count: number): Promise<void> {
+    await expect(
+      this.page.locator('div.rounded-xl.bg-white.border.border-gray-200.shadow-sm'),
+    ).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectGroupSubAnswerAt(index: number, text: string): Promise<void> {
+    const subCard = this.page
+      .locator('div.rounded-xl.bg-white.border.border-gray-200.shadow-sm')
+      .nth(index);
+    await expect(
+      subCard.locator('div.rounded-lg.bg-white.p-3:has([role="checkbox"]) .ProseMirror[contenteditable="true"]').first(),
+    ).toContainText(text, { timeout: 10_000 });
   }
 
   // Diagnostic: dump each sub-card's MC row editor text. Used to debug

@@ -44,10 +44,11 @@ test.describe('Question bulk approve', () => {
     await expect(approval.subTabPending).toBeVisible();
     await expect(approval.subTabApproved).toBeVisible();
     await expect(approval.subTabRejected).toBeVisible();
+    await approval.switchToPendingSub();
+    await expect(approval.subTabPending).toBeVisible();
   });
 
   test('moderator bulk approve bar renders when selecting pending row', async ({
-    page,
     banksList,
     bankForm,
     bankDetail,
@@ -69,23 +70,19 @@ test.describe('Question bulk approve', () => {
       'Account lacks canModerateThisBank — skipping moderator-only spec.',
     );
 
+    await bankDetail.switchToLibrary();
+    await bankDetail.setLibraryStatusFilter('draft');
+    await bankDetail.clickSendForReview(seed.questionName);
+
     await bankDetail.switchToPendingTab();
     await approval.switchToPendingSub();
+    const card = bankDetail.questionItemByName(seed.questionName);
+    await expect(card).toBeVisible({ timeout: 15_000 });
 
-    // Pending sub-tab populated only when other users submitted drafts for review;
-    // dev DB state is not seeded, so gate on row presence.
-    const items = page.locator('div[id]:has(button)');
-    const itemCount = await items.count();
-    test.skip(
-      itemCount === 0,
-      'No questions in Chờ duyệt sub-tab to drive bulk bar.',
-    );
-
-    await page
-      .locator('div.absolute.top-1\\.5.left-1\\.5 [role="checkbox"]')
-      .first()
-      .click();
+    await bankDetail.toggleSelectQuestion(seed.questionName);
     await expect(approval.bulkApproveButton).toBeVisible({ timeout: 10_000 });
+    await expect(approval.bulkApproveButton).toContainText('1');
     await expect(approval.bulkRejectButton).toBeVisible();
+    await expect(approval.bulkRejectButton).toContainText('1');
   });
 });

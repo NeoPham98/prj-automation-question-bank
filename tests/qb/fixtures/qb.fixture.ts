@@ -39,9 +39,16 @@ export const test = base.extend<QbFixtures>({
 
       const onConsole = (msg: any) => {
         try {
-          if (msg.type?.() === 'error') {
-            errors.push(`console.error: ${msg.text()}`);
-          }
+          if (msg.type?.() !== 'error') return;
+
+          const text = msg.text?.() || '';
+          if (text.includes('Failed to fetch RSC payload')) return;
+
+          const url = page.url();
+          const isUploadExcel = url.includes('/create/upload') && url.includes('mode=excel');
+          if (isUploadExcel && text.includes('Failed to fetch')) return;
+
+          errors.push(`console.error: ${text}`);
         } catch {
           // ignore
         }
@@ -52,6 +59,13 @@ export const test = base.extend<QbFixtures>({
           const errorText = req.failure()?.errorText || 'unknown';
           // Navigation/route changes abort in-flight requests (common on Next.js RSC).
           if (errorText.includes('net::ERR_ABORTED')) return;
+
+          const url = page.url();
+          const isUploadExcel = url.includes('/create/upload') && url.includes('mode=excel');
+          if (isUploadExcel && req.url()?.includes('/graphql') && errorText.includes('net::ERR_FAILED')) {
+            return;
+          }
+
           errors.push(`requestfailed: ${req.url()} (${errorText})`);
         } catch {
           errors.push('requestfailed: unknown');

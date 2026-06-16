@@ -34,9 +34,22 @@ export interface QuizTestCase {
   readonly label: string;
 }
 
+export interface QuizUiExpectations {
+  readonly stem: string;
+  readonly answer?: string;
+  readonly variant?: MCVariant;
+}
+
 export interface QuestionTypeStrategy {
   readonly code: QuizTypeCode;
   expectFormLoaded(page: Page): Promise<void>;
+  expectCreateUi(form: QuestionFormPage, page: Page, tc: QuizTestCase): Promise<void>;
+  expectReopenUi(
+    form: QuestionFormPage,
+    page: Page,
+    expected: QuizUiExpectations,
+    tc: QuizTestCase,
+  ): Promise<void>;
   readonly canSmokeSave: boolean;
   performSave(form: QuestionFormPage, name: string, tc: QuizTestCase): Promise<void>;
   // Per-type answer edit. Called after clickEditQuestion + setName(newStem).
@@ -66,6 +79,44 @@ class MultipleChoiceStrategy implements QuestionTypeStrategy {
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
   }
+  async expectCreateUi(form: QuestionFormPage, _page: Page, tc: QuizTestCase): Promise<void> {
+    if (tc.variant === 'statement') {
+      await form.expectStatementCellCount(4);
+    } else if (tc.variant === 'multi') {
+      await form.expectAnswerCount(3);
+      await form.expectAnswerAt(0, ' - A');
+      await form.expectAnswerAt(1, ' - B');
+      await form.expectAnswerAt(2, ' - C');
+    } else {
+      await form.expectAnswerCount(2);
+      await form.expectAnswerAt(0, ' - A');
+      await form.expectAnswerAt(1, ' - B');
+    }
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+    tc: QuizTestCase,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    if (tc.variant === 'statement') {
+      await form.expectStatementCellCount(4);
+      await form.expectStatementAnyChecked();
+      return;
+    }
+    if (tc.variant === 'multi') {
+      await form.expectAnswerCount(3);
+      await expect(form.answerEditorAt(1)).toContainText(' - B', { timeout: 10_000 });
+      await expect(form.answerEditorAt(2)).toContainText(' - C', { timeout: 10_000 });
+    } else {
+      await form.expectAnswerCount(2);
+      await expect(form.answerEditorAt(1)).toContainText(' - B', { timeout: 10_000 });
+    }
+    if (expected.answer) {
+      await form.expectAnswerAt(0, expected.answer);
+    }
+  }
   async performSave(form: QuestionFormPage, name: string, tc: QuizTestCase): Promise<void> {
     await form.saveMultipleChoiceQuestion(name, tc.variant ?? 'single', { hint: hintForName(name) });
   }
@@ -86,6 +137,21 @@ class GroupStrategy implements QuestionTypeStrategy {
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
   }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectGroupEditLoaded(2);
+    await form.expectGroupSubAnswerAt(0, 'A');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    await form.expectGroupSubCount(2);
+    if (expected.answer) {
+      await form.expectGroupSubAnswerAt(0, expected.answer);
+    }
+  }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveGroupQuestion(name, 2, { hint: hintForName(name) });
   }
@@ -100,6 +166,21 @@ class FillBlankStrategy implements QuestionTypeStrategy {
   readonly canSmokeSave = true;
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
+  }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectBlankCount(2);
+    await form.expectBlankAt(0, 'a1');
+    await form.expectBlankAt(1, 'a2');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    await form.expectBlankCount(2);
+    await form.expectBlankAt(0, 'b1');
+    await form.expectBlankAt(1, 'b2');
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveFillBlankQuestion(name, { hint: hintForName(name) });
@@ -117,6 +198,21 @@ class EssayStrategy implements QuestionTypeStrategy {
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
   }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectImageVisible();
+    await form.expectRubricSummaryContains('rubric reference');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    await form.expectImageVisible();
+    if (expected.answer) {
+      await form.expectRubricSummaryContains(expected.answer);
+    }
+  }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveEssayQuestion(name, { hint: hintForName(name) });
   }
@@ -132,6 +228,29 @@ class MatchingStrategy implements QuestionTypeStrategy {
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
   }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectImageVisible();
+    await form.expectAnswerCount(6);
+    await form.expectAnswerAt(0, ' - P1L');
+    await form.expectAnswerAt(1, ' - P1R');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    await form.expectImageVisible();
+    await form.expectAnswerCount(6);
+    if (expected.answer) {
+      await form.expectAnswerAt(0, expected.answer);
+    }
+    await form.expectAnswerAt(1, `${expected.stem} - P1R`);
+    await form.expectAnswerAt(2, `${expected.stem} - P2L`);
+    await form.expectAnswerAt(3, `${expected.stem} - P2R`);
+    await form.expectAnswerAt(4, `${expected.stem} - P3L`);
+    await form.expectAnswerAt(5, `${expected.stem} - P3R`);
+  }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveMatchingQuestion(name, { hint: hintForName(name) });
   }
@@ -146,6 +265,28 @@ class DropBoxStrategy implements QuestionTypeStrategy {
   readonly canSmokeSave = true;
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
+  }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectBlankCount(1);
+    await form.expectBlankAt(0, '-correct');
+    await form.expectAnswerCount(2);
+    await form.expectAnswerAt(0, 'opt1');
+    await form.expectAnswerAt(1, 'opt2');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    const optPrefix = (expected.answer ?? '').replace(/_ANS$/, '');
+    await form.expectStemContains(expected.stem);
+    await form.expectBlankCount(1);
+    if (expected.answer) {
+      await form.expectBlankAt(0, expected.answer);
+      await form.expectAnswerCount(2);
+      await form.expectAnswerAt(0, `${optPrefix} opt1`);
+      await form.expectAnswerAt(1, `${optPrefix} opt2`);
+    }
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveDropBoxQuestion(name, { hint: hintForName(name) });
@@ -165,6 +306,25 @@ class DragDropStrategy implements QuestionTypeStrategy {
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
   }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectBlankCount(2);
+    await form.expectBlankAt(0, '-a1');
+    await form.expectBlankAt(1, '-a2');
+    await form.expectWrongAnswerCount(2);
+    await form.expectWrongAnswers(['-w1', '-w2']);
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    await form.expectBlankCount(2);
+    await form.expectBlankAt(0, 'b1');
+    await form.expectBlankAt(1, 'b2');
+    await form.expectWrongAnswerCount(2);
+    await form.expectWrongAnswers(['w1', 'w2']);
+  }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveDragDropQuestion(name, { hint: hintForName(name) });
   }
@@ -182,6 +342,23 @@ class StickerStrategy implements QuestionTypeStrategy {
   readonly canSmokeSave = true;
   async expectFormLoaded(page: Page): Promise<void> {
     await expectSharedFormVisible(page);
+  }
+  async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    await form.expectStickerLabelVisible('-L1');
+    await form.expectStickerLabelVisible('-L2');
+    await form.expectStickerLabelVisible('-W1');
+  }
+  async expectReopenUi(
+    form: QuestionFormPage,
+    _page: Page,
+    expected: QuizUiExpectations,
+  ): Promise<void> {
+    await form.expectStemContains(expected.stem);
+    if (expected.answer) {
+      await form.expectStickerLabelVisible(`${expected.answer}-C1`);
+      await form.expectStickerLabelVisible(`${expected.answer}-C2`);
+      await form.expectStickerLabelVisible(`${expected.answer}-W1`);
+    }
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveStickerQuestion(name, SAMPLE_STICKER_IMAGE_PATH, { hint: hintForName(name) });

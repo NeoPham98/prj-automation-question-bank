@@ -107,7 +107,7 @@ test.describe('Question lifecycle per type (III.5 + III.9 + III.8)', () => {
       // Delay để UI store/route settle xong rồi mới click Edit.
       await page.waitForTimeout(1000);
 
-      // ─── Edit phase ───
+      // ─── After-create UI phase ───
       await bankDetail.clickEditQuestion(seedName);
 
       if (tc.code === 'group') {
@@ -125,6 +125,7 @@ test.describe('Question lifecycle per type (III.5 + III.9 + III.8)', () => {
         state: 'visible',
         timeout: 20_000,
       });
+      await strategy.expectCreateUi(questionForm, page, tc);
 
       const newStem = `Q_EDIT_${tc.id}_${Date.now()}`;
       const newAnswer = `${seedName}_ANS`;
@@ -167,35 +168,30 @@ test.describe('Question lifecycle per type (III.5 + III.9 + III.8)', () => {
       await bankDetail.expectHintModalContains(hintForName(newAnswer));
       await bankDetail.closeHintModal();
 
-      if (
-        tc.code === 'fill_in_the_blank' ||
-        tc.code === 'drag_and_drop'
-      ) {
-        await page.waitForTimeout(1000);
-        await bankDetail.switchToLibrary();
-        await bankDetail.clickEditQuestion(newStem);
-        await questionForm.nameEditor.waitFor({ state: 'visible', timeout: 20_000 });
-        await expect(questionForm.nameEditor).toContainText(newStem, { timeout: 10_000 });
+      await page.waitForTimeout(1000);
+      await bankDetail.switchToLibrary();
+      await bankDetail.clickEditQuestion(newStem);
+      await questionForm.nameEditor.waitFor({ state: 'visible', timeout: 20_000 });
+      await strategy.expectReopenUi(
+        questionForm,
+        page,
+        { stem: newStem, answer: newAnswer, variant: tc.variant },
+        tc,
+      );
 
-        await expect(questionForm.blankEditors()).toHaveCount(2, { timeout: 10_000 });
-        await expect(questionForm.blankEditors().nth(0)).toContainText('b1', { timeout: 10_000 });
-        await expect(questionForm.blankEditors().nth(1)).toContainText('b2', { timeout: 10_000 });
+      // re-verify ended up on quiz-form route. Bounce back to bank library.
+      await banksList.goto();
+      await banksList.openCardByName(bankName);
 
-        if (tc.code === 'drag_and_drop') {
-          await expect(questionForm.wrongAnswerInputs()).toHaveCount(2, { timeout: 10_000 });
-          // Backend wrong-answer order non-deterministic on reload; assert order-agnostic.
-          await expect.poll(
-            async () => questionForm.wrongAnswerInputs().evaluateAll(
-              (els) => (els as HTMLInputElement[]).map((e) => e.value).sort(),
-            ),
-            { timeout: 10_000 },
-          ).toEqual(['w1', 'w2']);
-        }
+      // Verify edited hint still persists after reopen.
+      await bankDetail.switchToLibrary();
+      await bankDetail.openHintModalOnCard(newStem);
+      await bankDetail.expectHintModalContains(hintForName(newAnswer));
+      await bankDetail.closeHintModal();
 
-        // fill/drag re-verify ended up on quiz-form route. Bounce back to bank library.
-        await banksList.goto();
-        await banksList.openCardByName(bankName);
-      }
+      await banksList.goto();
+      await banksList.openCardByName(bankName);
+      await bankDetail.switchToLibrary();
 
       // ─── Approve phase ───
       await bankDetail.switchToLibrary();

@@ -40,6 +40,9 @@ test.describe('Question upload (Excel)', () => {
     await bankDetail.openCreateUpload();
 
     await uploadQuestion.expectLoaded();
+    await expect(uploadQuestion.pickFileButton).toBeVisible();
+    await expect(uploadQuestion.saveButton).toBeVisible();
+    await expect(uploadQuestion.saveButton).toBeDisabled();
     await expect(uploadQuestion.emptyPreview).toBeVisible();
   });
 
@@ -65,8 +68,15 @@ test.describe('Question upload (Excel)', () => {
     await bankDetail.switchToLibrary();
     await bankDetail.openCreateUpload();
     await uploadQuestion.expectLoaded();
+    await expect(uploadQuestion.pickFileButton).toBeVisible();
+    await expect(uploadQuestion.saveButton).toBeVisible();
+    await expect(uploadQuestion.saveButton).toBeDisabled();
+    await expect(uploadQuestion.emptyPreview).toBeVisible();
 
     await uploadQuestion.uploadFile(SAMPLE_XLSX);
+    await expect(uploadQuestion.emptyPreview).toBeHidden({ timeout: 30_000 });
+    await expect(uploadQuestion.saveButton).toBeEnabled({ timeout: 15_000 });
+
     await uploadQuestion.save();
     await uploadQuestion.expectSaveSuccess();
   });

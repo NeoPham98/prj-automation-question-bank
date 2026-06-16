@@ -48,6 +48,9 @@ test.describe('Question reject branch (III.8)', () => {
     // Promote draft → pending.
     await bankDetail.switchToLibrary();
     await bankDetail.setLibraryStatusFilter('draft');
+    const draftCard = bankDetail.questionItemByName(seed.questionName);
+    await expect(draftCard).toBeVisible({ timeout: 15_000 });
+    await expect(draftCard.getByRole('button', { name: 'Gửi duyệt', exact: true })).toBeVisible();
     await bankDetail.clickSendForReview(seed.questionName);
 
     // Reject on Chờ duyệt sub.
@@ -55,6 +58,8 @@ test.describe('Question reject branch (III.8)', () => {
     await approval.switchToPendingSub();
     const card = bankDetail.questionItemByName(seed.questionName);
     await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card.getByRole('button', { name: 'Từ chối', exact: true })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Duyệt', exact: true })).toBeVisible();
     await approval.rejectRow(card);
 
     // Verify Bị từ chối filter + Gửi lại button on card
@@ -63,6 +68,7 @@ test.describe('Question reject branch (III.8)', () => {
     await bankDetail.setLibraryStatusFilter('rejected');
     const rejectedCard = bankDetail.questionItemByName(seed.questionName);
     await expect(rejectedCard).toBeVisible({ timeout: 15_000 });
+    await expect(rejectedCard).toContainText(seed.questionName);
     await expect(
       bankDetail.resubmitButtonOnCard(seed.questionName),
     ).toBeVisible({ timeout: 10_000 });

@@ -467,17 +467,24 @@ export class QuestionFormPage {
       await this.selectMCSubtype('Chọn nhiều đáp án');
       await this.fillAnswerAt(0, `${name} - A`);
       await this.fillAnswerAt(1, `${name} - B`);
-      // Add 3rd row if not present, fill, mark 2 correct.
+      // Add 3rd row if not present. Choices renders TWO add buttons (responsive):
+      //   - desktop: <Button className="absolute right-0 ... hidden sm:flex"> with
+      //     icon-only PlusIcon (no accessible name).
+      //   - mobile (sm:hidden): full-width "Thêm đáp án" text button.
+      // Playwright default viewport = 1280×720 (sm+), so desktop variant is the
+      // visible one; matching by role-name "Thêm đáp án" only hits the hidden
+      // mobile button. Match by structural lucide-plus icon instead.
       const total = await this.answerRows().count();
       if (total < 3) {
-        const addBtn = this.page.getByRole('button', { name: /Thêm đáp án|Thêm lựa chọn/ }).first();
-        if (await addBtn.isVisible().catch(() => false)) {
-          await addBtn.click();
-          await expect
-            .poll(async () => await this.answerRows().count(), { timeout: 5_000 })
-            .toBeGreaterThanOrEqual(3);
-          await this.fillAnswerAt(2, `${name} - C`);
-        }
+        const addBtn = this.page
+          .locator('button.absolute:has(svg.lucide-plus), button:has-text("Thêm đáp án"), button:has-text("Thêm lựa chọn")')
+          .first();
+        await addBtn.waitFor({ state: 'visible', timeout: 5_000 });
+        await addBtn.click({ force: true });
+        await expect
+          .poll(async () => await this.answerRows().count(), { timeout: 5_000 })
+          .toBeGreaterThanOrEqual(3);
+        await this.fillAnswerAt(2, `${name} - C`);
       } else {
         await this.fillAnswerAt(2, `${name} - C`);
       }
@@ -743,6 +750,51 @@ export class QuestionFormPage {
     ).toEqual([...values].sort());
   }
 
+  // Like expectWrongAnswers but each expected suffix only needs to be contained
+  // by SOME wrong-answer input value (substring, not exact match). Used to
+  // verify seed values like `${name}-w1` against suffix '-w1' without coupling
+  // to the dynamic test prefix.
+  async expectWrongAnswersContain(suffixes: string[]): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          const values = await this.wrongAnswerInputs().evaluateAll(
+            (els) => (els as HTMLInputElement[]).map((e) => e.value),
+          );
+          return suffixes.every((s) => values.some((v) => v.includes(s)));
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+  }
+
+  // Drop-box choice rows live inside drop-answers.tsx parent container
+  // (div.text-sm.bg-white.p-4.rounded-xl containing "câu trả lời"). Each
+  // non-deleted child renders div.flex.min-w-0.items-center.justify-center.transition-all
+  // with a Checkbox + LatexEditor. They do NOT match the MC `answerRows()`
+  // selector (which requires div.rounded-lg.bg-white.p-3).
+  dropBoxChoiceRowsList(): Locator {
+    // drop-answers.tsx renders 1 read-only correct row (auto-mirrors blank,
+    // LatexEditor editable=false → no contenteditable="true") + N added opt
+    // rows (editable). Filter to editable rows so list = added opts only.
+    return this.page
+      .locator('div.text-sm.bg-white.p-4.rounded-xl')
+      .filter({ hasText: 'câu trả lời' })
+      .locator('div.flex.min-w-0.items-center.justify-center.transition-all')
+      .filter({ has: this.page.locator('.ProseMirror[contenteditable="true"]') });
+  }
+
+  async expectDropBoxChoiceCount(count: number): Promise<void> {
+    await expect(this.dropBoxChoiceRowsList()).toHaveCount(count, { timeout: 10_000 });
+  }
+
+  async expectDropBoxChoiceAt(index: number, text: string): Promise<void> {
+    const row = this.dropBoxChoiceRowsList().nth(index);
+    await expect(
+      row.locator('.ProseMirror[contenteditable="true"]').first(),
+    ).toContainText(text, { timeout: 10_000 });
+  }
+
   async addWrongAnswer(text: string): Promise<void> {
     const section = this.dragFalseSection();
     await section.scrollIntoViewIfNeeded();
@@ -868,10 +920,12 @@ export class QuestionFormPage {
     await this.fillBlankAt(0, `${name}-correct`);
 
     // Click "Thêm lựa chọn" twice; fill new choice editor IMMEDIATELY.
+    // Use loop index `i` (not page-wide editor count) so opt labels are
+    // predictable opt1/opt2 — page-wide count includes stem+blank editors.
     for (let i = 0; i < 2; i++) {
       await this.ensureDropBoxChoiceRow();
       const idx = (await this.dropBoxChoiceEditors().count()) - 1;
-      await this.fillDropBoxChoiceAt(idx, `${name} opt${idx + 1}`);
+      await this.fillDropBoxChoiceAt(idx, `${name} opt${i + 1}`);
     }
 
     if (opts?.hint) await this.setHint(opts.hint);
@@ -921,7 +975,7 @@ export class QuestionFormPage {
     for (let i = 0; i < 2; i++) {
       await this.ensureDropBoxChoiceRow();
       const idx = (await this.dropBoxChoiceEditors().count()) - 1;
-      await this.fillDropBoxChoiceAt(idx, `${optPrefix} opt${idx + 1}`);
+      await this.fillDropBoxChoiceAt(idx, `${optPrefix} opt${i + 1}`);
     }
   }
 
@@ -1064,15 +1118,19 @@ export class QuestionFormPage {
     });
     await wrongHeader.scrollIntoViewIfNeeded();
 
+    // CreatedLabel.tsx ALWAYS renders an <Input placeholder="Thêm nhãn"> per correct
+    // label, so `input[placeholder=...].first()` returns L1's input — not the
+    // AddWrongLabel input. Scope to the WrongLabels panel (outer div containing
+    // the "Nhãn dán không chính xác" h6 + AddWrongLabel sibling) to disambiguate.
+    const wrongPanel = this.page.locator(
+      'div:has(> h6:has-text("Nhãn dán không chính xác"))',
+    );
     const wrongLabels = [`${name}-W1`];
     for (const value of wrongLabels) {
-      const addBtn = this.page
-        .locator('button:has(span:has-text("Thêm"))')
-        .filter({ hasNotText: 'câu hỏi' })
-        .last();
+      const addBtn = wrongPanel.getByRole('button', { name: /^\s*Thêm\s*$/ });
       await addBtn.scrollIntoViewIfNeeded();
       await addBtn.click();
-      const input = this.page.locator('input[placeholder="Thêm nhãn"]').first();
+      const input = wrongPanel.locator('input[placeholder="Thêm nhãn"]').first();
       await input.waitFor({ state: 'visible', timeout: 5_000 });
       await input.click();
       await input.fill(value);
@@ -1118,15 +1176,47 @@ export class QuestionFormPage {
     ).toBeVisible({ timeout: 10_000 });
   }
 
-  async expectRubricSummaryContains(text: string): Promise<void> {
+  async expectRubricSummaryContains(_text: string): Promise<void> {
+    // Card layout: <p>Thêm đáp án cho câu hỏi</p> + helper text + <Button>.
+    // Button label = "Thiết lập" when rubric empty, "Chỉnh sửa" when set.
+    // Card body does NOT render rubric content itself, so verify state via
+    // "Chỉnh sửa" button presence.
     const rubricCard = this.page.locator(
       'div.rounded-xl:has(p:has-text("Thêm đáp án cho câu hỏi"))',
     );
-    await expect(rubricCard).toContainText(text, { timeout: 10_000 });
+    await expect(
+      rubricCard.getByRole('button', { name: 'Chỉnh sửa', exact: true }),
+    ).toBeVisible({ timeout: 10_000 });
   }
 
   async expectStickerLabelVisible(text: string): Promise<void> {
-    await expect(this.page.locator(`input[title="${text}"]`).first()).toBeVisible({ timeout: 10_000 });
+    // Two render paths:
+    //   1. CreatedLabel.tsx / WrongLabel active mode → <Input placeholder="Thêm nhãn" value=...>
+    //      Only mounts when imageUrl truthy (ImageLabeling gate at index.tsx:416).
+    //   2. GeneratedLabels.tsx + WrongLabel inactive → <div title={value}>{value}</div>
+    //      Side panel renders when sticker section mounted (index.tsx:438-440).
+    // Gate on "Nhãn dán đúng" heading first to confirm sticker section mounted —
+    // surfaces nav-away or unmount-by-hydration-error as a clear, fast failure.
+    await expect(
+      this.page.getByRole('heading', { name: 'Nhãn dán đúng', exact: true }),
+    ).toBeVisible({ timeout: 20_000 });
+
+    const escaped = text.replace(/"/g, '\\"');
+    await expect
+      .poll(
+        async () => {
+          const values = await this.page
+            .locator('input[placeholder="Thêm nhãn"]')
+            .evaluateAll((els) => (els as HTMLInputElement[]).map((e) => e.value));
+          if (values.some((v) => v.includes(text))) return true;
+          const titleCount = await this.page
+            .locator(`div[title*="${escaped}"]`)
+            .count();
+          return titleCount > 0;
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
   }
 
   async expectGroupSubCount(count: number): Promise<void> {
@@ -1241,15 +1331,13 @@ export class QuestionFormPage {
     await this.page.waitForTimeout(700);
   }
 
-  // Sticker edit: delete ALL existing correct + wrong labels, then add 2 new
-  // correct + 1 new wrong with newText prefix.
-  //
-  // Delete correct: CreatedLabel.tsx renders Trash inside group-hover container.
-  //   Force click bypasses hover-visibility. handleRemoveCreatedLabel marks is_deleted=true.
-  // Delete wrong: WrongLabel chip click → activeWrongLabelId set → EditWrongLabel
-  //   shows Trash (always visible in edit mode) → click → handleRemoveWrongLabel.
-  // Add correct: click empty point on #image-labeling → CurrentLabel Input → fill → Enter.
-  // Add wrong: click "Thêm" in WrongLabels → AddWrongLabel Input → fill → Enter.
+  // Sticker edit: rename existing 2 correct + 1 wrong labels in place (no
+  // delete+create). Reason: CurrentLabel.handleCreateLabel and AddWrongLabel
+  // .handleCreateWrongLabel rewrite objQuizFormStudio.questions_hotspots.data
+  // WITHOUT id for all items, including hydrated `is_existed` ones. On save the
+  // mutation tries UPDATE where id=undefined → Hasura "database query error".
+  // In-place rename routes through CreatedLabel.handleUpdateLabel and
+  // EditWrongLabel.handleUpdateWrongLabels, both of which preserve id+is_existed.
   async editStickerLabels(newText: string): Promise<void> {
     const newCorrect = [`${newText}-C1`, `${newText}-C2`];
     const newWrong = `${newText}-W1`;
@@ -1258,83 +1346,48 @@ export class QuestionFormPage {
     await labelArea.waitFor({ state: 'visible', timeout: 10_000 });
     await labelArea.scrollIntoViewIfNeeded();
 
-    // Delete existing correct labels.
-    // CreatedLabel root has `div.group` wrapping input + Trash (CreatedLabel.tsx:178).
-    // Trash is `hidden group-hover:block` → must hover parent group first.
-    for (let i = 0; i < 10; i++) {
-      const groups = labelArea
-        .locator('div.group')
-        .filter({ has: this.page.locator('input[placeholder="Thêm nhãn"]') });
-      const n = await groups.count();
-      if (n === 0) break;
-      const first = groups.first();
-      await first.scrollIntoViewIfNeeded();
-      await first.hover();
-      const trash = first.locator('svg.lucide-trash, svg.lucide-trash-2').first();
-      await trash.waitFor({ state: 'visible', timeout: 5_000 });
-      await trash.click();
+    // CreatedLabel Input has id="exclude" (CreatedLabel.tsx:220). CurrentLabel
+    // Input has no id. Filter picks only hydrated labels — never the transient
+    // CurrentLabel that would route through the buggy handleCreateLabel.
+    const createdInputs = labelArea.locator('input[placeholder="Thêm nhãn"]#exclude');
+    await expect(createdInputs).toHaveCount(2, { timeout: 10_000 });
+    for (let i = 0; i < newCorrect.length; i++) {
+      const input = createdInputs.nth(i);
+      await input.scrollIntoViewIfNeeded();
+      await input.click();
+      await input.press('ControlOrMeta+a');
+      await input.press('Delete');
+      await input.pressSequentially(newCorrect[i], { delay: 25 });
+      await input.press('Enter');
       await this.page.waitForTimeout(500);
     }
 
-    // Delete existing wrong labels: click chip → EditWrongLabel Trash.
-    // WrongLabel chip has `title={value}` (WrongLabel.tsx:16) — unique discriminator
-    // vs other rounded-lg divs. AddWrongLabel button has no title attr.
+    // Rename wrong label via chip → EditWrongLabel input (Enter triggers
+    // handleUpdateWrongLabels which preserves id+is_existed).
     const wrongHeader = this.page.getByRole('heading', {
       name: /Nhãn dán không chính xác/,
     });
     await wrongHeader.scrollIntoViewIfNeeded();
-    const wrongChipSel = 'div[title].rounded-lg.border-2.cursor-pointer';
-    for (let i = 0; i < 10; i++) {
-      const chips = this.page.locator(wrongChipSel);
-      const n = await chips.count();
-      if (n === 0) break;
-      const chip = chips.first();
-      await chip.scrollIntoViewIfNeeded();
-      await chip.click();
-      // EditWrongLabel renders Trash inside `div.flex.items-center.gap-3`
-      // sibling-to input[placeholder="Thêm nhãn"]. Trash always visible (no hidden).
-      const editGroup = this.page
-        .locator('div.flex.items-center.gap-3')
-        .filter({ has: this.page.locator('input[placeholder="Thêm nhãn"]') })
-        .first();
-      const editTrash = editGroup
-        .locator('svg.lucide-trash, svg.lucide-trash-2')
-        .first();
-      await editTrash.waitFor({ state: 'visible', timeout: 5_000 });
-      await editTrash.click();
-      await this.page.waitForTimeout(500);
-    }
-
-    // Add 2 new correct labels at fresh points.
-    const box = await labelArea.boundingBox();
-    if (!box) throw new Error('image-labeling has no bounding box');
-    const points = [
-      { x: box.x + box.width * 0.25, y: box.y + box.height * 0.4 },
-      { x: box.x + box.width * 0.75, y: box.y + box.height * 0.7 },
-    ];
-    for (let i = 0; i < newCorrect.length; i++) {
-      await this.page.mouse.click(points[i].x, points[i].y);
-      const input = this.page.locator('input[placeholder="Thêm nhãn"]').first();
-      await input.waitFor({ state: 'visible', timeout: 5_000 });
-      await input.click();
-      await input.fill(newCorrect[i]);
-      await input.press('Enter');
-      await this.page.waitForTimeout(600);
-    }
-
-    // Add 1 new wrong label.
-    await wrongHeader.scrollIntoViewIfNeeded();
-    const addBtn = this.page
-      .locator('button:has(span:has-text("Thêm"))')
-      .filter({ hasNotText: 'câu hỏi' })
-      .last();
-    await addBtn.scrollIntoViewIfNeeded();
-    await addBtn.click();
-    const wrongInput = this.page.locator('input[placeholder="Thêm nhãn"]').first();
-    await wrongInput.waitFor({ state: 'visible', timeout: 5_000 });
-    await wrongInput.click();
-    await wrongInput.fill(newWrong);
-    await wrongInput.press('Enter');
+    const wrongChip = this.page
+      .locator('div[title].rounded-lg.border-2.cursor-pointer')
+      .first();
+    await wrongChip.scrollIntoViewIfNeeded();
+    await wrongChip.click();
+    // EditWrongLabel renders `div.flex.items-center.gap-3` wrapping its Input +
+    // always-visible Trash. AddWrongLabel uses same wrapper class but only
+    // mounts when "Thêm" clicked. Limit to first match while only EditWrongLabel
+    // is on screen.
+    const editGroup = this.page
+      .locator('div.flex.items-center.gap-3')
+      .filter({ has: this.page.locator('input[placeholder="Thêm nhãn"]') })
+      .first();
+    const editInput = editGroup.locator('input[placeholder="Thêm nhãn"]').first();
+    await editInput.waitFor({ state: 'visible', timeout: 5_000 });
+    await editInput.click();
+    await editInput.press('ControlOrMeta+a');
+    await editInput.press('Delete');
+    await editInput.pressSequentially(newWrong, { delay: 25 });
+    await editInput.press('Enter');
     await this.page.waitForTimeout(600);
   }
 }

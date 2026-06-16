@@ -18,10 +18,11 @@ export class ApprovalTab {
   readonly bulkResubmitButton: Locator;
 
   constructor(private readonly page: Page) {
-    // Pending sub-tabs render as <button> with exact text label.
-    this.subTabPending = page.getByRole('button', { name: 'Chờ duyệt', exact: true });
-    this.subTabApproved = page.getByRole('button', { name: 'Đã duyệt', exact: true });
-    this.subTabRejected = page.getByRole('button', { name: 'Đã từ chối', exact: true });
+    // Pending sub-tabs render as <button> with label + optional count badge
+    // (e.g. "Chờ duyệt 1"). Match label with optional trailing digits.
+    this.subTabPending = page.getByRole('button', { name: /^Chờ duyệt(\s+\d+)?$/ });
+    this.subTabApproved = page.getByRole('button', { name: /^Đã duyệt(\s+\d+)?$/ });
+    this.subTabRejected = page.getByRole('button', { name: /^Đã từ chối(\s+\d+)?$/ });
 
     // Bulk bar buttons — "Duyệt ({n})", "Từ chối ({n})", "Duyệt lại ({n})".
     this.bulkApproveButton = page.getByRole('button', { name: /^Duyệt \(\d+\)/ });

@@ -102,7 +102,33 @@ export class BanksListPage {
   }
 
   async openCardByName(name: string): Promise<void> {
-    await this.cardByName(name).locator('a[href^="/banks/"]').first().click();
-    await this.page.waitForURL(/\/banks\/[^/]+/, { timeout: 15_000 });
+    // SPA sometimes bounces /banks/<id> back to /banks listing during hydration.
+    // Wait for URL match AND a stable render signal (tab visible). Retry on bounce.
+    const tabLibrary = this.page.getByRole('tab', { name: 'Kho cá nhân', exact: true });
+    const tabPublic = this.page.getByRole('tab', { name: 'Công khai', exact: true });
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.cardByName(name).locator('a[href^="/banks/"]').first().click();
+        await this.page.waitForURL(/\/banks\/[^/?#]+(?:[?#]|$)/, { timeout: 15_000 });
+        await Promise.race([
+          tabLibrary.waitFor({ state: 'visible', timeout: 15_000 }),
+          tabPublic.waitFor({ state: 'visible', timeout: 15_000 }),
+        ]);
+        const pathname = new URL(this.page.url()).pathname;
+        if (/^\/banks\/?$/.test(pathname)) {
+          throw new Error('Page bounced back to /banks listing');
+        }
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 2) break;
+        await this.page.waitForTimeout(1000);
+        if (!/\/banks\/[^/?#]+/.test(this.page.url())) {
+          await this.heading.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+        }
+      }
+    }
+    throw lastErr;
   }
 }

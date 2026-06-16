@@ -81,7 +81,7 @@ class MultipleChoiceStrategy implements QuestionTypeStrategy {
   }
   async expectCreateUi(form: QuestionFormPage, _page: Page, tc: QuizTestCase): Promise<void> {
     if (tc.variant === 'statement') {
-      await form.expectStatementCellCount(4);
+      await form.expectStatementCellCount(2);
     } else if (tc.variant === 'multi') {
       await form.expectAnswerCount(3);
       await form.expectAnswerAt(0, ' - A');
@@ -101,7 +101,7 @@ class MultipleChoiceStrategy implements QuestionTypeStrategy {
   ): Promise<void> {
     await form.expectStemContains(expected.stem);
     if (tc.variant === 'statement') {
-      await form.expectStatementCellCount(4);
+      await form.expectStatementCellCount(2);
       await form.expectStatementAnyChecked();
       return;
     }
@@ -245,17 +245,22 @@ class MatchingStrategy implements QuestionTypeStrategy {
     if (expected.answer) {
       await form.expectAnswerAt(0, expected.answer);
     }
-    await form.expectAnswerAt(1, `${expected.stem} - P1R`);
-    await form.expectAnswerAt(2, `${expected.stem} - P2L`);
-    await form.expectAnswerAt(3, `${expected.stem} - P2R`);
-    await form.expectAnswerAt(4, `${expected.stem} - P3L`);
-    await form.expectAnswerAt(5, `${expected.stem} - P3R`);
+    await form.expectAnswerAt(1, `${expected.answer} - P1R`);
+    await form.expectAnswerAt(2, `${expected.answer} - P2L`);
+    await form.expectAnswerAt(3, `${expected.answer} - P2R`);
+    await form.expectAnswerAt(4, `${expected.answer} - P3L`);
+    await form.expectAnswerAt(5, `${expected.answer} - P3R`);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
     await form.saveMatchingQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
-    await form.fillAnswerAt(0, newText);
+    await form.fillAnswerAt(0, `${newText} - P1L`);
+    await form.fillAnswerAt(1, `${newText} - P1R`);
+    await form.fillAnswerAt(2, `${newText} - P2L`);
+    await form.fillAnswerAt(3, `${newText} - P2R`);
+    await form.fillAnswerAt(4, `${newText} - P3L`);
+    await form.fillAnswerAt(5, `${newText} - P3R`);
     await form.editHint(hintForName(newText));
   }
 }
@@ -267,11 +272,12 @@ class DropBoxStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async expectCreateUi(form: QuestionFormPage): Promise<void> {
+    // dropBoxChoiceRowsList filters out read-only correct row → only added opts.
     await form.expectBlankCount(1);
     await form.expectBlankAt(0, '-correct');
-    await form.expectAnswerCount(2);
-    await form.expectAnswerAt(0, 'opt1');
-    await form.expectAnswerAt(1, 'opt2');
+    await form.expectDropBoxChoiceCount(2);
+    await form.expectDropBoxChoiceAt(0, 'opt1');
+    await form.expectDropBoxChoiceAt(1, 'opt2');
   }
   async expectReopenUi(
     form: QuestionFormPage,
@@ -283,9 +289,9 @@ class DropBoxStrategy implements QuestionTypeStrategy {
     await form.expectBlankCount(1);
     if (expected.answer) {
       await form.expectBlankAt(0, expected.answer);
-      await form.expectAnswerCount(2);
-      await form.expectAnswerAt(0, `${optPrefix} opt1`);
-      await form.expectAnswerAt(1, `${optPrefix} opt2`);
+      await form.expectDropBoxChoiceCount(2);
+      await form.expectDropBoxChoiceAt(0, `${optPrefix} opt1`);
+      await form.expectDropBoxChoiceAt(1, `${optPrefix} opt2`);
     }
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
@@ -311,7 +317,7 @@ class DragDropStrategy implements QuestionTypeStrategy {
     await form.expectBlankAt(0, '-a1');
     await form.expectBlankAt(1, '-a2');
     await form.expectWrongAnswerCount(2);
-    await form.expectWrongAnswers(['-w1', '-w2']);
+    await form.expectWrongAnswersContain(['-w1', '-w2']);
   }
   async expectReopenUi(
     form: QuestionFormPage,

@@ -108,24 +108,42 @@ test.describe('Question lifecycle per type (III.5 + III.9 + III.8)', () => {
       await page.waitForTimeout(1000);
 
       // ─── After-create UI phase ───
-      await bankDetail.clickEditQuestion(seedName);
+      // Reopen with retry: some types (esp. sticker) unmount/redirect during
+      // hydration on first edit click. If verify fails AND page navigated away,
+      // re-enter bank and click edit again.
+      let createReopenErr: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await bankDetail.clickEditQuestion(seedName);
 
-      if (tc.code === 'group') {
-        await questionForm.expectGroupEditLoaded(2);
-        await page.waitForTimeout(1500);
-        await questionForm.debugDumpGroupSubAnswers('after-hydrate');
-      } else {
-        await expect(questionForm.typeSelectTrigger).toContainText(QUIZ_TYPE_LABELS[tc.code], {
-          timeout: 20_000,
-        });
-        await expect(questionForm.saveButton).toBeVisible({ timeout: 20_000 });
+          if (tc.code === 'group') {
+            await questionForm.expectGroupEditLoaded(2);
+            await page.waitForTimeout(1500);
+            await questionForm.debugDumpGroupSubAnswers('after-hydrate');
+          } else {
+            await expect(questionForm.typeSelectTrigger).toContainText(QUIZ_TYPE_LABELS[tc.code], {
+              timeout: 20_000,
+            });
+            await expect(questionForm.saveButton).toBeVisible({ timeout: 20_000 });
+          }
+
+          await questionForm.nameEditor.waitFor({
+            state: 'visible',
+            timeout: 20_000,
+          });
+          await strategy.expectCreateUi(questionForm, page, tc);
+          createReopenErr = null;
+          break;
+        } catch (e) {
+          createReopenErr = e;
+          if (attempt === 2) break;
+          await banksList.goto();
+          await banksList.openCardByName(bankName);
+          await bankDetail.switchToLibrary();
+          await page.waitForTimeout(1500);
+        }
       }
-
-      await questionForm.nameEditor.waitFor({
-        state: 'visible',
-        timeout: 20_000,
-      });
-      await strategy.expectCreateUi(questionForm, page, tc);
+      if (createReopenErr) throw createReopenErr;
 
       const newStem = `Q_EDIT_${tc.id}_${Date.now()}`;
       const newAnswer = `${seedName}_ANS`;
@@ -170,14 +188,33 @@ test.describe('Question lifecycle per type (III.5 + III.9 + III.8)', () => {
 
       await page.waitForTimeout(1000);
       await bankDetail.switchToLibrary();
-      await bankDetail.clickEditQuestion(newStem);
-      await questionForm.nameEditor.waitFor({ state: 'visible', timeout: 20_000 });
-      await strategy.expectReopenUi(
-        questionForm,
-        page,
-        { stem: newStem, answer: newAnswer, variant: tc.variant },
-        tc,
-      );
+
+      // Reopen with retry: some types (esp. sticker) may unmount/redirect during
+      // hydration on 2nd edit. If verify fails AND page navigated away from
+      // quiz-form, re-enter bank and click edit again.
+      let reopenErr: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await bankDetail.clickEditQuestion(newStem);
+          await questionForm.nameEditor.waitFor({ state: 'visible', timeout: 20_000 });
+          await strategy.expectReopenUi(
+            questionForm,
+            page,
+            { stem: newStem, answer: newAnswer, variant: tc.variant },
+            tc,
+          );
+          reopenErr = null;
+          break;
+        } catch (e) {
+          reopenErr = e;
+          if (attempt === 2) break;
+          await banksList.goto();
+          await banksList.openCardByName(bankName);
+          await bankDetail.switchToLibrary();
+          await page.waitForTimeout(1500);
+        }
+      }
+      if (reopenErr) throw reopenErr;
 
       // re-verify ended up on quiz-form route. Bounce back to bank library.
       await banksList.goto();

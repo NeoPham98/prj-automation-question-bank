@@ -21,6 +21,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export type MCVariant = 'single' | 'multi' | 'statement';
 
+// Derive hint text from question name. Used by performSave + editAnswer.
+// Spec verifies modal contains this text after redirect.
+export function hintForName(name: string): string {
+  return `Hint for ${name}`;
+}
+
 export interface QuizTestCase {
   readonly code: QuizTypeCode;
   readonly variant?: MCVariant;
@@ -61,7 +67,7 @@ class MultipleChoiceStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string, tc: QuizTestCase): Promise<void> {
-    await form.saveMultipleChoiceQuestion(name, tc.variant ?? 'single');
+    await form.saveMultipleChoiceQuestion(name, tc.variant ?? 'single', { hint: hintForName(name) });
   }
   // single/multi: edit row-0 text. statement: flip 2nd preview cell.
   async editAnswer(form: QuestionFormPage, newText: string, tc: QuizTestCase): Promise<void> {
@@ -70,6 +76,7 @@ class MultipleChoiceStrategy implements QuestionTypeStrategy {
     } else {
       await form.fillAnswerAt(0, newText);
     }
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -80,10 +87,11 @@ class GroupStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveGroupQuestion(name, 2);
+    await form.saveGroupQuestion(name, 2, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.editGroupFirstSubAnswer(newText);
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -94,11 +102,12 @@ class FillBlankStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveFillBlankQuestion(name);
+    await form.saveFillBlankQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.fillBlankAt(0, 'b1', { typeDelay: 30 });
     await form.fillBlankAt(1, 'b2', { typeDelay: 30 });
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -109,10 +118,11 @@ class EssayStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveEssayQuestion(name);
+    await form.saveEssayQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.editEssayRubric(newText);
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -123,10 +133,11 @@ class MatchingStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveMatchingQuestion(name);
+    await form.saveMatchingQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.fillAnswerAt(0, newText);
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -137,13 +148,14 @@ class DropBoxStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveDropBoxQuestion(name);
+    await form.saveDropBoxQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     // drop_box edit: update blank(correct) + 2 extra choices.
     const optPrefix = newText.replace(/_ANS$/, '');
     await form.editDropBoxBlankAnswer(newText);
     await form.editDropBoxChoices(optPrefix);
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -154,13 +166,14 @@ class DragDropStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveDragDropQuestion(name);
+    await form.saveDragDropQuestion(name, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
     await form.fillBlankAt(0, 'b1', { typeDelay: 30 });
     await form.fillBlankAt(1, 'b2', { typeDelay: 30 });
     await form.editWrongAnswerAt(0, 'w1');
     await form.editWrongAnswerAt(1, 'w2');
+    await form.editHint(hintForName(newText));
   }
 }
 
@@ -171,10 +184,11 @@ class StickerStrategy implements QuestionTypeStrategy {
     await expectSharedFormVisible(page);
   }
   async performSave(form: QuestionFormPage, name: string): Promise<void> {
-    await form.saveStickerQuestion(name, SAMPLE_STICKER_IMAGE_PATH);
+    await form.saveStickerQuestion(name, SAMPLE_STICKER_IMAGE_PATH, { hint: hintForName(name) });
   }
   async editAnswer(form: QuestionFormPage, newText: string): Promise<void> {
-    await form.addStickerWrongLabel(newText);
+    await form.editStickerLabels(newText);
+    await form.editHint(hintForName(newText));
   }
 }
 

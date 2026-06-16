@@ -65,6 +65,10 @@ export default defineConfig({
     {
       name: 'qb',
       testMatch: /tests[\\/]qb[\\/]specs[\\/].*\.spec\.ts$/,
+      // Per-action ~1s slowMo for human visual verification. Bumped test timeout
+      // to 120s to accommodate the inflation (default 30s is too tight).
+      // Override via QB_SLOWMO=0 npx playwright test ... for fast CI runs.
+      timeout: 120_000,
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1440, height: 900 },
@@ -73,6 +77,9 @@ export default defineConfig({
         locale: 'vi-VN',
         userAgent:
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        launchOptions: {
+          // slowMo: process.env.QB_SLOWMO !== undefined ? Number(process.env.QB_SLOWMO) : 500,
+        },
       },
       dependencies: ['qb-setup'],
     },

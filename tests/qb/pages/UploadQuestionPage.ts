@@ -43,19 +43,34 @@ export class UploadQuestionPage {
     await this.saveButton.click();
   }
 
+  // ToastColor wraps raw Sonner toast() → no data-type attrs. Detect error via
+  // icon class (XCircle text-red-600).
+  private errorToastLocator(): Locator {
+    return this.page.locator('[data-sonner-toast]:has(svg.text-red-600)');
+  }
+
   async expectNoErrorToast(): Promise<void> {
-    await expect(
-      this.page.locator(
-        '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
-      ),
-    ).toHaveCount(0, { timeout: 2_000 });
+    await expect(this.errorToastLocator()).toHaveCount(0, { timeout: 2_000 });
   }
 
   async expectSaveSuccess(): Promise<void> {
-    // Toast: "Đã lưu {n} câu hỏi vào ngân hàng."
-    await expect(
-      this.page.getByText(/Đã lưu \d+ câu hỏi vào ngân hàng/),
-    ).toBeVisible({ timeout: 30_000 });
+    // Race: success toast vs error toast. If save fails the validation/server
+    // toast shows up before success toast → throw with toast text. Prevents
+    // false pass when "Lưu" stays on the upload page without redirect.
+    const successToast = this.page
+      .getByText(/Đã lưu \d+ câu hỏi vào ngân hàng/)
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => 'success' as const);
+
+    const errorToast = this.errorToastLocator().first();
+    const failure = errorToast
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(async () => {
+        const text = await errorToast.textContent();
+        throw new Error(`Upload save failed — toast: ${(text || '').trim() || '<empty>'}`);
+      });
+
+    await Promise.race([successToast, failure]);
     await this.expectNoErrorToast();
   }
 }

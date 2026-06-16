@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from '@playwright/test';
+import { raceAgainstErrorToast } from './toast-helpers';
 
 // Pending tab actions (Duyệt câu hỏi). Gated by canModerateThisBank.
 // Sub-tabs: Chờ duyệt / Đã duyệt / Đã từ chối (PendingSubTabs.tsx:9-13).
@@ -44,16 +45,18 @@ export class ApprovalTab {
   // Anchor by card param (from bankDetail.questionItemByName).
   async approveRow(card: Locator): Promise<void> {
     await card.getByRole('button', { name: 'Duyệt', exact: true }).click();
-    await expect(
+    const success = expect(
       this.page.getByText('Đã duyệt câu hỏi', { exact: false }),
     ).toBeVisible({ timeout: 15_000 });
+    await raceAgainstErrorToast(this.page, success, 'Approve row', 15_000);
   }
 
   async rejectRow(card: Locator): Promise<void> {
     await card.getByRole('button', { name: 'Từ chối', exact: true }).click();
-    await expect(
+    const success = expect(
       this.page.getByText('Đã từ chối câu hỏi', { exact: false }),
     ).toBeVisible({ timeout: 15_000 });
+    await raceAgainstErrorToast(this.page, success, 'Reject row', 15_000);
   }
 
   async resubmitRow(card: Locator): Promise<void> {
@@ -61,14 +64,16 @@ export class ApprovalTab {
   }
 
   async expectBulkApproveSuccess(count: number): Promise<void> {
-    await expect(
+    const success = expect(
       this.page.getByText(`Đã duyệt ${count} câu hỏi`, { exact: false }),
     ).toBeVisible({ timeout: 15_000 });
+    await raceAgainstErrorToast(this.page, success, 'Bulk approve', 15_000);
   }
 
   async expectBulkRejectSuccess(count: number): Promise<void> {
-    await expect(
+    const success = expect(
       this.page.getByText(`Đã từ chối ${count} câu hỏi`, { exact: false }),
     ).toBeVisible({ timeout: 15_000 });
+    await raceAgainstErrorToast(this.page, success, 'Bulk reject', 15_000);
   }
 }

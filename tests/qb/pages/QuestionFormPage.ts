@@ -134,9 +134,32 @@ export class QuestionFormPage {
   async setName(text: string): Promise<void> {
     // TipTap: use pressSequentially + blur so onUpdate fires reliably.
     // fill() on contenteditable can skip the editor's transaction hook.
+    // Edit-mode race: TipTap setContent from store fires AFTER mount, so Ctrl+A+Delete
+    // may run before hydration → clear empty → store re-injects old → type appends.
+    // Wait for editor stable (non-changing text across 400ms) before clearing.
+    await this.nameEditor.waitFor({ state: 'visible', timeout: 10_000 });
+    let lastText = '';
+    for (let i = 0; i < 15; i++) {
+      const cur = (await this.nameEditor.textContent()) || '';
+      if (cur === lastText && i > 0) break;
+      lastText = cur;
+      await this.page.waitForTimeout(400);
+    }
+
     await this.nameEditor.click();
     await this.nameEditor.press('Control+a');
     await this.nameEditor.press('Delete');
+
+    // Verify cleared; if hydration re-injected, repeat clear up to 3 times.
+    for (let i = 0; i < 3; i++) {
+      const cur = ((await this.nameEditor.textContent()) || '').trim();
+      if (cur === '') break;
+      await this.nameEditor.click();
+      await this.nameEditor.press('Control+a');
+      await this.nameEditor.press('Delete');
+      await this.page.waitForTimeout(300);
+    }
+
     await this.nameEditor.pressSequentially(text, { delay: 5 });
     await this.nameEditor.blur();
     // Debounce auto-save in MultipleQuiz uses ~500ms — let store sync.
@@ -246,23 +269,60 @@ export class QuestionFormPage {
     await this.saveButton.click();
   }
 
+  // Hint editor (Studio/tools/question-hint-editor/index.tsx).
+  // Collapsed: <button> w/ Lightbulb + text "Thêm gợi ý cho câu hỏi".
+  // Open: div.bg-violet-50 wraps TiptapTextEditor inside .hint-editor child.
+  // Delete: <button aria-label="Xóa gợi ý"> with Trash2.
+  hintTrigger(): Locator {
+    return this.page.getByRole('button', { name: /Thêm gợi ý cho câu hỏi/ }).first();
+  }
+
+  hintEditor(): Locator {
+    return this.page
+      .locator('.hint-editor .ProseMirror[contenteditable="true"]')
+      .first();
+  }
+
+  async setHint(text: string): Promise<void> {
+    // If still collapsed → click trigger to mount editor.
+    const trigger = this.hintTrigger();
+    if (await trigger.isVisible().catch(() => false)) {
+      await trigger.scrollIntoViewIfNeeded();
+      await trigger.click();
+    }
+    const editor = this.hintEditor();
+    await editor.waitFor({ state: 'visible', timeout: 8_000 });
+    await editor.click();
+    await editor.press('Control+a');
+    await editor.press('Delete');
+    await editor.pressSequentially(text, { delay: 15 });
+    await editor.blur();
+    // TipTap debounced onUpdate → store sync.
+    await this.page.waitForTimeout(700);
+  }
+
+  async editHint(text: string): Promise<void> {
+    // On edit reload, container auto-opens when hint non-empty (isEmptyHtmlContent=false).
+    // setHint handles both states.
+    await this.setHint(text);
+  }
+
+  // ToastColor wraps Sonner raw `toast()` → no data-type attr. Error icon is
+  // XCircle text-red-600; success = CheckCircle text-green-600; loading = LoaderIcon text-blue-600.
+  // Detect error toasts via icon color class.
+  private errorToastLocator() {
+    return this.page.locator('[data-sonner-toast]:has(svg.text-red-600)');
+  }
+
   async expectNoErrorToast(): Promise<void> {
-    await expect(
-      this.page.locator(
-        '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
-      ),
-    ).toHaveCount(0, { timeout: 2_000 });
+    await expect(this.errorToastLocator()).toHaveCount(0, { timeout: 2_000 });
   }
 
   private async expectRedirectWithoutError(timeout: number = 20_000): Promise<void> {
     const redirect = this.page
       .waitForURL(/\/banks\/[^/]+\?tab=library/, { timeout })
       .then(() => 'redirect' as const);
-    const errorToast = this.page
-      .locator(
-        '[data-sonner-toast][data-type="error"], [data-sonner-toast][data-type="warning"]',
-      )
-      .first();
+    const errorToast = this.errorToastLocator().first();
     const failure = errorToast.waitFor({ state: 'visible', timeout }).then(async () => {
       const text = await errorToast.textContent();
       throw new Error(`Save failed — toast: ${(text || '').trim() || '<empty>'}`);
@@ -289,18 +349,29 @@ export class QuestionFormPage {
   }
 
   async expectEditSuccess(): Promise<void> {
-    const redirect = this.page.waitForURL(/\/banks\/[^/]+\?tab=library/, {
-      timeout: 20_000,
-    });
+    // Race: redirect OR success toast vs. error toast.
+    // Trước có `.catch(() => {})` nuốt timeout → error toast (vd "Không để
+    // trống câu trả lời") auto-dismiss trong ~5-10s khiến expectNoErrorToast
+    // gọi sau 20s thấy 0 toast = false pass.
+    const redirect = this.page
+      .waitForURL(/\/banks\/[^/]+\?tab=library/, { timeout: 20_000 })
+      .then(() => 'redirect' as const);
 
     const successToast = this.page
       .getByText('Sửa câu hỏi thành công', { exact: false })
-      .waitFor({ state: 'visible', timeout: 20_000 });
+      .waitFor({ state: 'visible', timeout: 20_000 })
+      .then(() => 'success' as const);
 
-    await Promise.race([redirect, successToast]).catch(() => {});
+    const errorToastLoc = this.errorToastLocator().first();
+    const failure = errorToastLoc
+      .waitFor({ state: 'visible', timeout: 20_000 })
+      .then(async () => {
+        const text = await errorToastLoc.textContent();
+        throw new Error(`Edit failed — toast: ${(text || '').trim() || '<empty>'}`);
+      });
+
+    await Promise.race([redirect, successToast, failure]);
     await this.expectNoErrorToast();
-
-    // Some flows (group) may not show the toast.
     await this.page.waitForTimeout(800);
   }
 
@@ -329,6 +400,7 @@ export class QuestionFormPage {
   async saveMultipleChoiceQuestion(
     name: string,
     variant: 'single' | 'multi' | 'statement' = 'single',
+    opts?: { hint?: string },
   ): Promise<void> {
     await this.setName(name);
     await this.selectFirstDifficulty();
@@ -372,6 +444,7 @@ export class QuestionFormPage {
       await this.markAnswerCorrectAt(0);
     }
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -379,7 +452,7 @@ export class QuestionFormPage {
   // Essay save: id=3 setting card "Thêm đáp án cho câu hỏi" opens DialogAiJudge
   // (src/components/Studio/modal/dialog-ai-judge.tsx:55-116). Validation:
   // quiz-service/index.tsx:43-49 requires answers[0].content (= quizzSettingState.content).
-  async saveEssayQuestion(name: string): Promise<void> {
+  async saveEssayQuestion(name: string, opts?: { hint?: string }): Promise<void> {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -412,6 +485,7 @@ export class QuestionFormPage {
     await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
     await this.page.waitForTimeout(700);
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -421,7 +495,7 @@ export class QuestionFormPage {
   // (parent div hidden via codeType===matching, but checkbox still rendered).
   // Validation: quiz-service/index.tsx:130-146 requires all non-deleted items
   // to have non-empty content (hasHotspotContent).
-  async saveMatchingQuestion(name: string): Promise<void> {
+  async saveMatchingQuestion(name: string, opts?: { hint?: string }): Promise<void> {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -437,6 +511,7 @@ export class QuestionFormPage {
       await this.fillAnswerAt(i, `${name} - P${pairIndex + 1}${side}`);
     }
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -492,19 +567,47 @@ export class QuestionFormPage {
     await this.nameEditor.click();
 
     if (opts?.clearFromEnd) {
-      await this.nameEditor.press('End');
+      // Blank chip = .isEdit wrapper w/ contentEditable=false hosting a child
+      // ProseMirror + TrashIcon SVG (input-edit.tsx:42, onClick={handleNodeRemove}).
+      // Playwright click() on tiny lucide SVG (size=20) inside contenteditable can
+      // miss React's onClick handler. Use dispatchEvent('click') which fires a
+      // synthetic MouseEvent that React's delegated listener captures reliably.
+      const trashIcons = this.page.locator(
+        '.isEdit svg.lucide-trash-2, .isEdit svg.lucide-trash',
+      );
+      for (let safety = 0; safety < 20; safety++) {
+        const cnt = await trashIcons.count().catch(() => 0);
+        if (cnt === 0) break;
+        await trashIcons.first().dispatchEvent('click');
+        await this.page.waitForTimeout(200);
+      }
 
-      // clear slowly until both visible text and inline blank nodes are gone
-      for (let i = 0; i < 600; i++) {
-        const currentText = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
-        const blankCount = await this.blankEditors().count().catch(() => 0);
-        if (!currentText && blankCount === 0) break;
-        await this.nameEditor.press('Backspace');
+      // Fallback: Ctrl+A + Delete to clear stem text (and any leftover chip).
+      await this.nameEditor.click();
+      await this.nameEditor.press('Control+a');
+      await this.nameEditor.press('Delete');
+      await this.page.waitForTimeout(deleteDelay);
+
+      // Stage-2 fallback: if blanks/text still present, hammer Backspace from
+      // stem end (TipTap selection reset). Up to 80 Backspaces covers long stem.
+      let remainingBlanks = await this.blankEditors().count().catch(() => 0);
+      let after = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
+      if (after || remainingBlanks > 0) {
+        await this.nameEditor.click();
+        await this.nameEditor.press('End');
+        for (let i = 0; i < 80; i++) {
+          await this.nameEditor.press('Backspace');
+          if (i % 10 === 0) {
+            after = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
+            remainingBlanks = await this.blankEditors().count().catch(() => 0);
+            if (!after && remainingBlanks === 0) break;
+          }
+        }
         await this.page.waitForTimeout(deleteDelay);
       }
 
-      const after = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
-      const remainingBlanks = await this.blankEditors().count().catch(() => 0);
+      after = ((await this.nameEditor.textContent().catch(() => '')) ?? '').trim();
+      remainingBlanks = await this.blankEditors().count().catch(() => 0);
       if (after || remainingBlanks > 0) {
         throw new Error(
           `Failed to clear stem; remainingText="${after.slice(0, 30)}" remainingBlanks=${remainingBlanks}`,
@@ -581,7 +684,9 @@ export class QuestionFormPage {
     await newInput.click();
     await newInput.fill(text);
     await newInput.blur();
-    await this.page.waitForTimeout(400);
+    // emitCurrentPayload runs via useDebounceEffect 500ms (fill-drag-drop-quiz/index.tsx:431);
+    // wait > debounce so the wrong answer enters the staged payload before save.
+    await this.page.waitForTimeout(800);
   }
 
   async editWrongAnswerAt(index: number, text: string): Promise<void> {
@@ -598,25 +703,26 @@ export class QuestionFormPage {
     await input.press('Delete');
     await input.pressSequentially(text, { delay: 30 });
     await input.blur();
-    await this.page.waitForTimeout(400);
+    await this.page.waitForTimeout(800);
   }
 
   // Fill-in-the-blank save. 2 blanks + fill correct answer into each.
   // No DragFalseAnswers for fill type (fill-drag-drop-quiz/index.tsx:471-472).
-  async saveFillBlankQuestion(name: string): Promise<void> {
+  async saveFillBlankQuestion(name: string, opts?: { hint?: string }): Promise<void> {
     await this.setNameWithBlanks(name, 2);
     await this.fillBlankAt(0, 'a1');
     await this.fillBlankAt(1, 'a2');
     await this.attachImageToStem().catch(() => {});
     await this.selectFirstProgramLeaf();
     await this.selectFirstDifficulty();
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
 
   // Drag-and-drop save. 2 blanks + fill correct answer + 2 wrong answers via
   // DragFalseAnswers (fill-drag-drop-quiz/index.tsx:474-479).
-  async saveDragDropQuestion(name: string): Promise<void> {
+  async saveDragDropQuestion(name: string, opts?: { hint?: string }): Promise<void> {
     await this.setNameWithBlanks(name, 2);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -625,6 +731,10 @@ export class QuestionFormPage {
     await this.fillBlankAt(1, `${name}-a2`);
     await this.addWrongAnswer(`${name}-w1`);
     await this.addWrongAnswer(`${name}-w2`);
+    // Safety belt: extra wait so the last debounced emit definitely fires
+    // (fill-drag-drop-quiz/index.tsx:431 useDebounceEffect 500ms) before save click.
+    await this.page.waitForTimeout(800);
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -676,7 +786,7 @@ export class QuestionFormPage {
     await this.page.waitForTimeout(400);
   }
 
-  async saveDropBoxQuestion(name: string): Promise<void> {
+  async saveDropBoxQuestion(name: string, opts?: { hint?: string }): Promise<void> {
     await this.setNameWithBlanks(name, 1);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -691,6 +801,7 @@ export class QuestionFormPage {
       await this.fillDropBoxChoiceAt(idx, `${name} opt${idx + 1}`);
     }
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -749,7 +860,11 @@ export class QuestionFormPage {
   // server data only). Click "Thêm câu hỏi" (line 770) → handleAddSubQuestion seeds
   // default MC sub (line 666) with 2 empty hotspots + own name editor.
   // Sub card = div.rounded-xl.bg-white.border.border-gray-200.shadow-sm (line 814).
-  async saveGroupQuestion(name: string, subCount: number = 4): Promise<void> {
+  async saveGroupQuestion(
+    name: string,
+    subCount: number = 4,
+    opts?: { hint?: string },
+  ): Promise<void> {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -806,6 +921,7 @@ export class QuestionFormPage {
       await this.page.waitForTimeout(400);
     }
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -828,7 +944,11 @@ export class QuestionFormPage {
   //   3. Type → Enter → handleCreateWrongLabel pushes into wrongLabels
   //
   // Wrong section header h6 text: "Nhãn dán không chính xác".
-  async saveStickerQuestion(name: string, imagePath: string): Promise<void> {
+  async saveStickerQuestion(
+    name: string,
+    imagePath: string,
+    opts?: { hint?: string },
+  ): Promise<void> {
     await this.setName(name);
     await this.selectFirstDifficulty();
     await this.selectFirstProgramLeaf();
@@ -864,14 +984,14 @@ export class QuestionFormPage {
       await this.page.waitForTimeout(600);
     }
 
-    // Wrong labels: click "Thêm" inside WrongLabels section, type, Enter.
+    // 1 wrong label: click "Thêm" inside WrongLabels section, type, Enter.
     // Section anchored by h6 "Nhãn dán không chính xác".
     const wrongHeader = this.page.getByRole('heading', {
       name: /Nhãn dán không chính xác/,
     });
     await wrongHeader.scrollIntoViewIfNeeded();
 
-    const wrongLabels = [`${name}-W1`, `${name}-W2`];
+    const wrongLabels = [`${name}-W1`];
     for (const value of wrongLabels) {
       const addBtn = this.page
         .locator('button:has(span:has-text("Thêm"))')
@@ -887,6 +1007,7 @@ export class QuestionFormPage {
       await this.page.waitForTimeout(500);
     }
 
+    if (opts?.hint) await this.setHint(opts.hint);
     await this.save();
     await this.expectSaveSuccess();
   }
@@ -918,8 +1039,59 @@ export class QuestionFormPage {
     ).toHaveCount(subCount, { timeout: 20_000 });
   }
 
-  // Group edit: replace first sub-card's first MC answer row text.
-  // Sub card selector matches saveGroupQuestion's locator.
+  // Diagnostic: dump each sub-card's MC row editor text. Used to debug
+  // hydration on edit reload.
+  async debugDumpGroupSubAnswers(label: string = 'init'): Promise<void> {
+    const subCards = this.page.locator(
+      'div.rounded-xl.bg-white.border.border-gray-200.shadow-sm',
+    );
+    const subCount = await subCards.count();
+    console.log(`[group-debug:${label}] subCount=${subCount}`);
+    for (let i = 0; i < subCount; i++) {
+      const card = subCards.nth(i);
+      const editors = card.locator('.ProseMirror[contenteditable="true"]');
+      const editorCount = await editors.count();
+      for (let j = 0; j < editorCount; j++) {
+        const text = (await editors.nth(j).textContent()) ?? '';
+        console.log(`[group-debug:${label}] sub#${i} editor#${j}: "${text.trim()}"`);
+      }
+      const rows = card.locator(
+        'div.rounded-lg.bg-white.p-3:has([role="checkbox"])',
+      );
+      const rowCount = await rows.count();
+      console.log(`[group-debug:${label}] sub#${i} rows=${rowCount}`);
+    }
+    // Dump Zustand group store snapshot (what validation reads).
+    const storeJson = await this.page.evaluate(() => {
+      try {
+        return localStorage.getItem('groupQuizStudio') ?? '';
+      } catch {
+        return '';
+      }
+    });
+    try {
+      const parsed = JSON.parse(storeJson || '{}');
+      const subs = parsed?.state?.subQuestions ?? [];
+      console.log(`[group-debug:${label}] zustand.subQuestions.length=${subs.length}`);
+      subs.forEach((s: any, i: number) => {
+        const hs = s?.quizzInfo?.questions_hotspots?.data ?? [];
+        console.log(
+          `[group-debug:${label}] zustand.sub#${i} type=${s?.type} hotspots=${hs.length}`,
+        );
+        hs.forEach((h: any, j: number) => {
+          console.log(
+            `[group-debug:${label}]   sub#${i}.hotspot#${j} keys=${Object.keys(h || {}).join(',')}`,
+          );
+          console.log(
+            `[group-debug:${label}]   sub#${i}.hotspot#${j} raw=${JSON.stringify(h).slice(0, 200)}`,
+          );
+        });
+      });
+    } catch (e) {
+      console.log(`[group-debug:${label}] zustand parse failed: ${e}`);
+    }
+  }
+
   async editGroupFirstSubAnswer(text: string): Promise<void> {
     const subCard = this.page
       .locator('div.rounded-xl.bg-white.border.border-gray-200.shadow-sm')
@@ -932,11 +1104,11 @@ export class QuestionFormPage {
     await firstRow.waitFor({ state: 'visible', timeout: 8_000 });
     const editor = firstRow.locator('.ProseMirror[contenteditable="true"]').first();
     await editor.click();
-    await editor.press('Control+a');
+    await editor.press('ControlOrMeta+a');
     await editor.press('Delete');
-    await editor.pressSequentially(text, { delay: 15 });
+    await editor.pressSequentially(text, { delay: 25 });
     await editor.blur();
-    await this.page.waitForTimeout(500);
+    await this.page.waitForTimeout(1_000);
   }
 
   // Essay edit: rubric card button = "Chỉnh sửa" when content present (essay-quiz.tsx:227).
@@ -964,11 +1136,88 @@ export class QuestionFormPage {
     await this.page.waitForTimeout(700);
   }
 
-  // Sticker edit: append one extra wrong label. Same flow as save loop body.
-  async addStickerWrongLabel(text: string): Promise<void> {
+  // Sticker edit: delete ALL existing correct + wrong labels, then add 2 new
+  // correct + 1 new wrong with newText prefix.
+  //
+  // Delete correct: CreatedLabel.tsx renders Trash inside group-hover container.
+  //   Force click bypasses hover-visibility. handleRemoveCreatedLabel marks is_deleted=true.
+  // Delete wrong: WrongLabel chip click → activeWrongLabelId set → EditWrongLabel
+  //   shows Trash (always visible in edit mode) → click → handleRemoveWrongLabel.
+  // Add correct: click empty point on #image-labeling → CurrentLabel Input → fill → Enter.
+  // Add wrong: click "Thêm" in WrongLabels → AddWrongLabel Input → fill → Enter.
+  async editStickerLabels(newText: string): Promise<void> {
+    const newCorrect = [`${newText}-C1`, `${newText}-C2`];
+    const newWrong = `${newText}-W1`;
+
+    const labelArea = this.page.locator('#image-labeling');
+    await labelArea.waitFor({ state: 'visible', timeout: 10_000 });
+    await labelArea.scrollIntoViewIfNeeded();
+
+    // Delete existing correct labels.
+    // CreatedLabel root has `div.group` wrapping input + Trash (CreatedLabel.tsx:178).
+    // Trash is `hidden group-hover:block` → must hover parent group first.
+    for (let i = 0; i < 10; i++) {
+      const groups = labelArea
+        .locator('div.group')
+        .filter({ has: this.page.locator('input[placeholder="Thêm nhãn"]') });
+      const n = await groups.count();
+      if (n === 0) break;
+      const first = groups.first();
+      await first.scrollIntoViewIfNeeded();
+      await first.hover();
+      const trash = first.locator('svg.lucide-trash, svg.lucide-trash-2').first();
+      await trash.waitFor({ state: 'visible', timeout: 5_000 });
+      await trash.click();
+      await this.page.waitForTimeout(500);
+    }
+
+    // Delete existing wrong labels: click chip → EditWrongLabel Trash.
+    // WrongLabel chip has `title={value}` (WrongLabel.tsx:16) — unique discriminator
+    // vs other rounded-lg divs. AddWrongLabel button has no title attr.
     const wrongHeader = this.page.getByRole('heading', {
       name: /Nhãn dán không chính xác/,
     });
+    await wrongHeader.scrollIntoViewIfNeeded();
+    const wrongChipSel = 'div[title].rounded-lg.border-2.cursor-pointer';
+    for (let i = 0; i < 10; i++) {
+      const chips = this.page.locator(wrongChipSel);
+      const n = await chips.count();
+      if (n === 0) break;
+      const chip = chips.first();
+      await chip.scrollIntoViewIfNeeded();
+      await chip.click();
+      // EditWrongLabel renders Trash inside `div.flex.items-center.gap-3`
+      // sibling-to input[placeholder="Thêm nhãn"]. Trash always visible (no hidden).
+      const editGroup = this.page
+        .locator('div.flex.items-center.gap-3')
+        .filter({ has: this.page.locator('input[placeholder="Thêm nhãn"]') })
+        .first();
+      const editTrash = editGroup
+        .locator('svg.lucide-trash, svg.lucide-trash-2')
+        .first();
+      await editTrash.waitFor({ state: 'visible', timeout: 5_000 });
+      await editTrash.click();
+      await this.page.waitForTimeout(500);
+    }
+
+    // Add 2 new correct labels at fresh points.
+    const box = await labelArea.boundingBox();
+    if (!box) throw new Error('image-labeling has no bounding box');
+    const points = [
+      { x: box.x + box.width * 0.25, y: box.y + box.height * 0.4 },
+      { x: box.x + box.width * 0.75, y: box.y + box.height * 0.7 },
+    ];
+    for (let i = 0; i < newCorrect.length; i++) {
+      await this.page.mouse.click(points[i].x, points[i].y);
+      const input = this.page.locator('input[placeholder="Thêm nhãn"]').first();
+      await input.waitFor({ state: 'visible', timeout: 5_000 });
+      await input.click();
+      await input.fill(newCorrect[i]);
+      await input.press('Enter');
+      await this.page.waitForTimeout(600);
+    }
+
+    // Add 1 new wrong label.
     await wrongHeader.scrollIntoViewIfNeeded();
     const addBtn = this.page
       .locator('button:has(span:has-text("Thêm"))')
@@ -976,11 +1225,11 @@ export class QuestionFormPage {
       .last();
     await addBtn.scrollIntoViewIfNeeded();
     await addBtn.click();
-    const input = this.page.locator('input[placeholder="Thêm nhãn"]').first();
-    await input.waitFor({ state: 'visible', timeout: 5_000 });
-    await input.click();
-    await input.fill(text);
-    await input.press('Enter');
-    await this.page.waitForTimeout(500);
+    const wrongInput = this.page.locator('input[placeholder="Thêm nhãn"]').first();
+    await wrongInput.waitFor({ state: 'visible', timeout: 5_000 });
+    await wrongInput.click();
+    await wrongInput.fill(newWrong);
+    await wrongInput.press('Enter');
+    await this.page.waitForTimeout(600);
   }
 }

@@ -8,6 +8,8 @@ import { QuestionFormPage } from '../pages/QuestionFormPage';
 import { UploadQuestionPage } from '../pages/UploadQuestionPage';
 import { ApprovalTab } from '../pages/ApprovalTab';
 import { CurriculumDetailPage } from '../pages/CurriculumDetailPage';
+import { CurriculumListPage } from '../pages/CurriculumListPage';
+import { CurriculumFormDialog } from '../pages/CurriculumFormDialog';
 import { DifficultyDetailPage } from '../pages/DifficultyDetailPage';
 
 type QbFixtures = {
@@ -20,6 +22,8 @@ type QbFixtures = {
   uploadQuestion: UploadQuestionPage;
   approval: ApprovalTab;
   curriculum: CurriculumDetailPage;
+  curriculumList: CurriculumListPage;
+  curriculumForm: CurriculumFormDialog;
   difficulty: DifficultyDetailPage;
   uiGate: undefined;
 };
@@ -96,6 +100,12 @@ export const test = base.extend<QbFixtures>({
   },
   curriculum: async ({ page }, use) => {
     await use(new CurriculumDetailPage(page));
+  },
+  curriculumList: async ({ page }, use) => {
+    await use(new CurriculumListPage(page));
+  },
+  curriculumForm: async ({ page }, use) => {
+    await use(new CurriculumFormDialog(page));
   },
   difficulty: async ({ page }, use) => {
     await use(new DifficultyDetailPage(page));

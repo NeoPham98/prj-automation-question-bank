@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from '@playwright/test';
+import { raceAgainstErrorToast } from './toast-helpers';
 
 // Create/edit bank modal.
 // Source: src/components/pages/question-bank/question-banks/components/BankFormDialog.tsx:55-133
@@ -69,8 +70,11 @@ export class BankFormDialog {
   async submit(mode: 'create' | 'edit'): Promise<void> {
     const btn = mode === 'create' ? this.submitCreate : this.submitEdit;
     await btn.click();
-    // Hasura dev mutation latency under parallel load can exceed 15s.
-    await expect(this.dialog).toBeHidden({ timeout: 30_000 });
+    // Race dialog-close (= server accepted) against error toast. Dialog stays
+    // open on validation failure → without the race we wait 30s then fail with
+    // a vague timeout. With the race we throw immediately + include toast text.
+    const dialogClosed = expect(this.dialog).toBeHidden({ timeout: 30_000 });
+    await raceAgainstErrorToast(this.page, dialogClosed, `Bank ${mode}`, 30_000);
   }
 
   async cancel(): Promise<void> {

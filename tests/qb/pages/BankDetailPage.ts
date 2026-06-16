@@ -89,9 +89,54 @@ export class BankDetailPage {
     await expect(this.tabLibrary).toHaveAttribute('data-state', 'active', { timeout: 20_000 });
   }
 
+  async switchToPublic(): Promise<void> {
+    await this.tabPublic.waitFor({ state: 'visible', timeout: 20_000 });
+    await this.tabPublic.scrollIntoViewIfNeeded();
+    await this.tabPublic.click({ force: true });
+    await expect(this.tabPublic).toHaveAttribute('data-state', 'active', { timeout: 20_000 });
+  }
+
   async switchToPendingTab(): Promise<void> {
     await this.tabPending.click();
     await expect(this.tabPending).toHaveAttribute('data-state', 'active');
+  }
+
+  // Library status filter pills (QuestionBankDetail.tsx:1162-1211). Pill is
+  // `<button type="button">` with rounded-full class, text = label + optional count.
+  async setLibraryStatusFilter(
+    status: 'draft' | 'pending' | 'approved' | 'rejected',
+  ): Promise<void> {
+    const label =
+      status === 'draft' ? 'Bản nháp'
+        : status === 'pending' ? 'Chờ duyệt'
+          : status === 'approved' ? 'Đã duyệt'
+            : 'Bị từ chối';
+    // Pill accessible name is label optionally followed by count digits.
+    const pill = this.page.getByRole('button', {
+      name: new RegExp(`^${label}(\\s+\\d+)?$`),
+    });
+    await pill.first().click();
+  }
+
+  // "Gửi duyệt" button on library draft card (quiz-header.tsx:362-374,
+  // showSendForReview && onSendForReview gates render). Toast on success:
+  // "Đã gửi duyệt câu hỏi" (QuestionBankDetail.tsx:840).
+  async clickSendForReview(name: string): Promise<void> {
+    const card = this.questionItemByName(name);
+    await card.waitFor({ state: 'visible', timeout: 10_000 });
+    await card.getByRole('button', { name: 'Gửi duyệt', exact: true }).click();
+    await expect(
+      this.page.getByText('Đã gửi duyệt câu hỏi', { exact: false }).first(),
+    ).toBeVisible({ timeout: 15_000 });
+  }
+
+  // "Gửi lại" button on library rejected card (quiz-header.tsx:307-318,
+  // questionStatus='rejected' + canModerateThisBank). Caller verifies visibility.
+  resubmitButtonOnCard(name: string): Locator {
+    return this.questionItemByName(name).getByRole('button', {
+      name: 'Gửi lại',
+      exact: true,
+    });
   }
 
   async openCreateManual(): Promise<void> {
@@ -172,5 +217,37 @@ export class BankDetailPage {
   async toggleSelectQuestion(name: string): Promise<void> {
     const card = this.questionItemByName(name);
     await card.locator('div.absolute.top-1\\.5.left-1\\.5 [role="checkbox"]').click();
+  }
+
+  // Hint icon on question card. Source: src/components/Quiz/QuestionHint/index.tsx
+  //   <button aria-label="Xem gợi ý giải bài"> wrapping CircleHelp inside SimpleTooltip("Gợi ý").
+  //   Rendered only when isEmptyHtmlContent(hint) === false.
+  // Modal: DialogWrapper title="Gợi ý giải bài", body = div.prose with DOMPurify(hint) HTML.
+  hintModal(): Locator {
+    return this.page.locator('[role="dialog"]').filter({ hasText: 'Gợi ý giải bài' });
+  }
+
+  async openHintModalOnCard(name: string): Promise<void> {
+    const card = this.questionItemByName(name);
+    await card.waitFor({ state: 'visible', timeout: 10_000 });
+    const btn = card.locator('button[aria-label="Xem gợi ý giải bài"]').first();
+    await btn.waitFor({ state: 'visible', timeout: 10_000 });
+    await btn.scrollIntoViewIfNeeded();
+    await btn.click();
+    await this.hintModal().waitFor({ state: 'visible', timeout: 10_000 });
+  }
+
+  async expectHintModalContains(text: string): Promise<void> {
+    const modal = this.hintModal();
+    await expect(modal).toBeVisible({ timeout: 10_000 });
+    await expect(modal.locator('div.prose').first()).toContainText(text, {
+      timeout: 5_000,
+    });
+  }
+
+  async closeHintModal(): Promise<void> {
+    const modal = this.hintModal();
+    await this.page.keyboard.press('Escape');
+    await modal.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
   }
 }
